@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timedelta
 import json
+import os, requests, io
 
 import pandas as pd
 import pytz
@@ -18,6 +19,9 @@ CACHE_DIR = Path("data/cache")
 STATIC_DIR = Path("data/static")
 JST = pytz.timezone("Asia/Tokyo")
 
+RUN_ENV = os.getenv("RUN_ENV", "local") 
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nakamin/portfolio8/main"
+
 st.set_page_config(
     layout="wide",
 )
@@ -25,21 +29,70 @@ st.set_page_config(
 # ========================
 # 共通ユーティリティ
 # ========================
+def _read_parquet_from_github(rel_path: str) -> pd.DataFrame:
+    """
+    - GitHub の raw URL から parquet を読み込む
+    - rel_path はレポジトリ root からの相対パス
+    """
+    url = f"{GITHUB_RAW_BASE}/{rel_path}"
+    resp = requests.get(url)
+    resp.raise_for_status()
+    df = pd.read_parquet(io.BytesIO(resp.content))
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+    return df
 
-@st.cache_data(show_spinner=False)
-def load_parquet(name: str) -> pd.DataFrame:
-    path = CACHE_DIR / f"{name}.parquet"
+
+def _read_parquet_local(path: Path) -> pd.DataFrame:
+    """
+    - ローカル or Actions で、ファイルシステム上の parquet を読む
+    """
     df = pd.read_parquet(path)
     if "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
     return df
 
 @st.cache_data(show_spinner=False)
+def load_parquet(name: str) -> pd.DataFrame:
+    """
+    name: 'demand_bf1w_ytd' のようなベース名を渡す
+    - local 環境: data/cache/{name}.parquet を直接読む
+    - hf 環境: GitHub raw の data/cache/{name}.parquet を読みに行く
+    """
+    if RUN_ENV == "hf":
+        rel_path = f"data/cache/{name}.parquet"
+        df = _read_parquet_from_github(rel_path)
+    else:
+        path = CACHE_DIR / f"{name}.parquet"
+        df = _read_parquet_local(path)
+
+    return df
+
+@st.cache_data(show_spinner=False)
 def load_metadata() -> dict:
-    path = CACHE_DIR / "metadata.json"
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    """
+    メタ情報（sources, last_updated など）を取得
+    - local 環境: data/cache/metadata.json を読む
+    - hf 環境: GitHub raw の data/cache/metadata.json を読む
+    """
+    if RUN_ENV == "hf":
+        rel_path = "data/cache/metadata.json"
+        url = f"{GITHUB_RAW_BASE}/{rel_path}"
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            # 初回など、まだ metadata.json が無いとき
+            return {}
+        try:
+            return resp.json()
+        except ValueError:
+            # 念のため、JSONとして読めないときは空にする
+            return {}
+    else:
+        path = CACHE_DIR / "metadata.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
 
 def jst_now_floor_30min() -> datetime:
     """現在時刻をJSTで30分刻みに丸める"""
@@ -108,7 +161,7 @@ with tab_dashboard:
     print("price_fc: \n", price_fc)
 
     fig_p = plot_price(price_fc=price_fc, now_floor=now_floor)
-    st.plotly_chart(fig_p, use_container_width=True)
+    st.plotly_chart(fig_p, width='stretch')
     
     st.markdown(
         f"""
@@ -131,7 +184,7 @@ with tab_dashboard:
     print("dispatch: \n", dispatch)
 
     fig_balance = plot_energy_mix(dispatch, now_floor)
-    st.plotly_chart(fig_balance, use_container_width=True)
+    st.plotly_chart(fig_balance, width='stretch')
     
     st.markdown(
     f"""
