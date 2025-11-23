@@ -5,6 +5,9 @@ on:
     - cron: '30 15 * * *'   # JST 00:30
   workflow_dispatch:   # 手動実行もできるように
 
+permissions:
+  contents: write
+
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
