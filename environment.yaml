@@ -1,5 +1,6 @@
 name: op_py311
 channels:
+  - conda-forge
   - pytorch
   - nvidia
   - defaults
