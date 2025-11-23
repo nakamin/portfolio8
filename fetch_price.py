@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
-import re
-import os
+import re, os, time
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
@@ -61,17 +60,18 @@ def _set_by_label(scope, label_text: str, checked: bool):
     """
     # .check-styleクラスが付いたlabelのうち、テキストが label_text を含む先頭を取る
     lab = scope.locator(f'label.check-style:has-text("{label_text}")').first
-    lab.wait_for(state="visible", timeout=5000)
+    lab.wait_for(state="visible", timeout=5000) # ラベル要素を取得して表示状態になるまで待機
+    
     for_id = lab.get_attribute("for") # for属性から対応するinputを取得
     if not for_id:
         raise RuntimeError(f'label "{label_text}" に for 属性がありません')
+    
     inp = scope.locator(f'input#{for_id}')
+    # inp.wait_for(state="attached", timeout=5000) # 非表示でも存在すればOK
 
-    # try:
-    #     inp.set_checked(checked, force=True, timeout=1000) # チェックの状態を設定
-    # except Exception:
     # 現在値を見てズレていればクリック
-    if inp.is_checked() != checked: # set_checkedが通らないので
+    is_checked = inp.get_attribute("checked") is not None
+    if is_checked != checked:
         lab.click(force=True, timeout=1000)
 
     # 検証（最大2回までリトライ）
