@@ -51,36 +51,74 @@ def click_today_cell_only(page):
             "日セルをクリックできませんでした。debug: debug/calendar_page.png / calendar_panel.png / trace.zip"
         ) from e
 
+import time
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 def _set_by_label(scope, label_text: str, checked: bool):
     """
     - labelを手掛かりにチェック入力をチェック状態にする
     - scope: この範囲の中で要素を探す
     - label_text: 実際のラベルのテキスト
     - checked: 最終的にしたい状態（True: オン、False: オフ）
+    - タイムアウト時は警告ログを出してスキップする
     """
-    # .check-styleクラスが付いたlabelのうち、テキストが label_text を含む先頭を取る
+
+    # 1) ラベル取得
     lab = scope.locator(f'label.check-style:has-text("{label_text}")').first
-    lab.wait_for(state="visible", timeout=5000) # ラベル要素を取得して表示状態になるまで待機
-    
-    for_id = lab.get_attribute("for") # for属性から対応するinputを取得
+    try:
+        lab.wait_for(state="visible", timeout=15_000)
+    except PlaywrightTimeoutError:
+        print(f'[WARN] label "{label_text}" が見つからない or visible にならない → スキップ')
+        return
+
+    # 2) for 属性 → input の id を取得
+    for_id = lab.get_attribute("for")
     if not for_id:
-        raise RuntimeError(f'label "{label_text}" に for 属性がありません')
-    
+        print(f'[WARN] label "{label_text}" に for 属性がない → スキップ')
+        return
+
     inp = scope.locator(f'input#{for_id}')
-    # inp.wait_for(state="attached", timeout=5000) # 非表示でも存在すればOK
+    try:
+        # 存在すればOK
+        inp.wait_for(state="attached", timeout=15_000)
+    except PlaywrightTimeoutError:
+        print(f'[WARN] input#{for_id} が DOM に attach されない → スキップ')
+        return
 
-    # 現在値を見てズレていればクリック
-    is_checked = inp.get_attribute("checked") is not None
-    if is_checked != checked:
-        lab.click(force=True, timeout=1000)
+    # 3) 現在の状態（checked 属性の有無）を確認
+    def _attr_checked() -> bool:
+        attr = inp.get_attribute("checked")
+        return attr is not None
 
-    # 検証（最大2回までリトライ）
-    for _ in range(2):
-        if inp.is_checked() == checked:
-            return
-        lab.click(force=True, timeout=1000)
-        time.sleep(0.1)
-    raise RuntimeError(f'"{label_text}" を {checked} にできませんでした')
+    try:
+        current = _attr_checked()
+    except PlaywrightTimeoutError:
+        print(f'[WARN] input#{for_id} の checked 属性取得で timeout → スキップ')
+        return
+
+    # すでに望む状態なら何もしない
+    if current == checked:
+        return
+
+    # 4) クリックして状態を変更（最大数回リトライ）
+    for attempt in range(3):
+        try:
+            lab.click(force=True, timeout=2_000)
+        except PlaywrightTimeoutError:
+            print(f'[WARN] label "{label_text}" click timeout (attempt={attempt+1})')
+            continue
+
+        time.sleep(0.2)  # DOM 更新待ち
+
+        try:
+            if _attr_checked() == checked:
+                return
+        except PlaywrightTimeoutError:
+            print(f'[WARN] input#{for_id} attr check timeout after click (attempt={attempt+1})')
+            continue
+
+    print(f'[WARN] "{label_text}" を {checked} にできなかったが処理は継続する')
+
 
 def select_price_table_only(page):
     """
