@@ -23,7 +23,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          run: conda env update -n op_py311 -f environment.yaml
+          conda env update -n op_py311 -f environment.yaml
 
       - name: Run daily pipeline
         env:
