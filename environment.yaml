@@ -20,6 +20,7 @@ dependencies:
   - lightgbm
   - pygam
   - pyomo
+  - highspy 
   - huggingface_hub
   - tqdm
   - pyyaml
