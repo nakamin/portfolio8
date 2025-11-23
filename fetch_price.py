@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import re, os, time
 import pandas as pd
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 JST = timezone(timedelta(hours=9))
 CACHE_DIR = "data/cache"
@@ -41,7 +42,7 @@ def click_today_cell_only(page):
     try:
         day.first.wait_for(state="visible", timeout=5_000)
         day.first.click(timeout=10_000, force=True)
-    except PWTimeout as e:
+    except PlaywrightTimeoutError as e:
         # デバッグ出力して落とす
         page.screenshot(os.path.join(DEBUG_DIR, "calendar_page.png"), full_page=True)
         try: panel.first.screenshot(os.path.join(DEBUG_DIR, "calendar_panel.png"))
@@ -50,9 +51,6 @@ def click_today_cell_only(page):
         raise RuntimeError(
             "日セルをクリックできませんでした。debug: debug/calendar_page.png / calendar_panel.png / trace.zip"
         ) from e
-
-import time
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 def _set_by_label(scope, label_text: str, checked: bool):
     """
@@ -130,11 +128,19 @@ def select_price_table_only(page):
 
     # テーブル用のスコープを固定（グラフ側に触らない）
     scope = page.locator("#checkbox-area--table")
-    scope.wait_for(state="visible", timeout=5000)
-
+    
+    try:
+        scope.wait_for(state="attached", timeout=15000)
+    except PlaywrightTimeoutError:
+        print("[WARN] #checkbox-area--table が visible にならないため、"
+            "エリア/システムのチェック切り替えをスキップします。")
+        return
+    
     # システムプライス OFF
-    _set_by_label(scope, "システムプライス", False)
-
+    try:
+        _set_by_label(scope, "システムプライス", False)
+    except Exception:
+        pass
     # まず「全エリア」OFF（ONになっていることが多い）
     try:
         _set_by_label(scope, "全エリア", False)
