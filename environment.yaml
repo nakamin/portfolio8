@@ -35,3 +35,4 @@ dependencies:
       - pulp
       - jpholiday
       - cvxopt
+      - playwright

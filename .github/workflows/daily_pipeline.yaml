@@ -25,6 +25,9 @@ jobs:
         run: |
           conda env update -n op_py311 -f environment.yaml
 
+      - name: Install Playwright browsers
+        run: playwright install
+
       - name: Run daily pipeline
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
