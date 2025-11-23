@@ -121,7 +121,7 @@ def create_sequences(data, sequence_length):
     return torch.stack(sequences)
 
 
-def evaluate(model, dataloader, scaler_y, device="cuda"):
+def evaluate(model, dataloader, scaler_y, device):
     model.eval()
     all_predictions = []
 
@@ -171,10 +171,11 @@ def predict_demand():
     print(test_sequences.shape)  # (n_samples, sequence_length, num_features)
 
     model = load_demand_model()
-    model.to(device="cuda")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device=device)
     test_loader = DataLoader(TensorDataset(test_sequences), batch_size=128, shuffle=False)
     
-    predictions = evaluate(model, test_loader, scaler_y)
+    predictions = evaluate(model, test_loader, scaler_y, device)
     print("predictions: \n", predictions[:5])
     
     # 予測結果をparquetで保存
