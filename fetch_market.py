@@ -334,7 +334,7 @@ def fetch_coal_worldbank_monthly(start, end):
         last_err = f"World Bank failed: {e_wb}"
 
     # cache
-    return _load_cache(COAL_M_CACHE, "date", start, end, "cache")
+    return coal_filtered
 
 def coal_monthly_to_daily_ffill(coal_m_df, start, end):
     """
