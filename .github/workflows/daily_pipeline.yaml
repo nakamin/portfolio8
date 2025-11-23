@@ -26,7 +26,7 @@ jobs:
           conda env update -n op_py311 -f environment.yaml
 
       - name: Install Playwright browsers
-        run: python -m playwright install # モジュールをスクリプトとして実行する
+        run: conda run -n op_py311 python -m playwright install # モジュールをスクリプトとして実行する
 
       - name: Run daily pipeline
         env:
