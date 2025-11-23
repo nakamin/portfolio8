@@ -166,7 +166,7 @@ def select_quantity_table_only(page):
             has=page.locator('h4.filter-sub-section__ttl', has_text="入札・約定量")
         )
         scope = section.locator(".checkbox-area--table")
-    scope.first.wait_for(state="visible", timeout=5000)
+    scope.first.wait_for(state="attached", timeout=5000)
     scope = scope.first
 
     # まず全て OFF
