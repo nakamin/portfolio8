@@ -331,10 +331,8 @@ def fetch_coal_worldbank_monthly(start, end):
         return coal_filtered
 
     except Exception as e_wb:
-        last_err = f"World Bank failed: {e_wb}"
+        print(f"World Bank failed: {e_wb}")
 
-    # cache
-    return coal_filtered
 
 def coal_monthly_to_daily_ffill(coal_m_df, start, end):
     """
