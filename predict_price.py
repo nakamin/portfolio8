@@ -5,10 +5,12 @@ from datetime import datetime, timedelta
 
 import lightgbm as lgb
 from typing import Optional, Any
+from huggingface_hub import hf_hub_download
+
 from utils.make_date_features import make_date, make_daypart, make_season
 
 CACHE_DIR = Path("data/cache")
-MODEL_DIR = Path("model")
+HF_REPO_ID = "nakamichan/power-forecast-models"
 
 # 実績と予報
 DEMAND_PATH = CACHE_DIR / "demand_forecast.parquet" # 実績も入っている
@@ -17,10 +19,10 @@ MARKET_PATH = CACHE_DIR / "fx_commodity_30min_af1w.parquet"
 PRICE_PATH = CACHE_DIR / "spot_tokyo_bf1w_tdy.parquet"
 
 # モデル
-GAM_PATH = MODEL_DIR / "gam_price.pkl"
-LGB10_PATH = MODEL_DIR / "lgb_price_p10.txt"
-LGB50_PATH = MODEL_DIR / "lgb_price_p50.txt"
-LGB90_PATH = MODEL_DIR / "lgb_price_p90.txt"
+GAM_PATH = "gam_price.pkl"
+LGB10_PATH = "lgb_price_p10.txt"
+LGB50_PATH = "lgb_price_p50.txt"
+LGB90_PATH = "lgb_price_p90.txt"
 
 # このモデルの結果
 PRICE_OUT_PATH = CACHE_DIR / "price_forecast.parquet"
@@ -44,11 +46,28 @@ def load_price_model() -> Any:
     """
     価格予測モデルを読み込む
     """
-    gam = joblib.load(GAM_PATH)
+    # モデルファイルを Hub からダウンロード
+    gam_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=GAM_PATH,
+    )
+    lgb10_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=LGB10_PATH,
+    )
+    lgb50_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=LGB50_PATH,
+    )
+    lgb90_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=LGB90_PATH,
+    )
+    gam = joblib.load(gam_path)
 
-    lgb_p10 = lgb.Booster(model_file=LGB10_PATH)
-    lgb_p50 = lgb.Booster(model_file=LGB50_PATH)
-    lgb_p90 = lgb.Booster(model_file=LGB90_PATH)
+    lgb_p10 = lgb.Booster(model_file=lgb10_path)
+    lgb_p50 = lgb.Booster(model_file=lgb50_path)
+    lgb_p90 = lgb.Booster(model_file=lgb90_path)
     
     return gam, lgb_p10, lgb_p50, lgb_p90
 

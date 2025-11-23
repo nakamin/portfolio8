@@ -6,26 +6,38 @@ from datetime import datetime, timedelta, timezone
 from torch.utils.data import DataLoader, TensorDataset
 import torch
 import joblib
+from huggingface_hub import hf_hub_download
+
 from model.demand_model import GRUModel
 from utils.make_date_features import make_date
-import torch
 
 CACHE_DIR = Path("data/cache")
-MODEL_DIR = Path("models")
+
 WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 DEMAND_REALIZED_PATH = CACHE_DIR / "demand_bf1w_ytd.parquet"
 DEMAND_OUT_PATH = CACHE_DIR / "demand_forecast.parquet"
+
+HF_REPO_ID = "nakamichan/power-forecast-models"
+DEMAND_MODEL = "model_demand.pth"
+SCALER_X_PATH = "scaler_X.pkl"
+SCALER_Y_PATH = "scaler_y.pkl"
 
 # =========================
 # モデルのロード部分
 # =========================
 
-def load_demand_model(model_path) -> Any:
+def load_demand_model() -> Any:
     """
     需要予測モデルを読み込んで返す
     """
-    if model_path is None:
-        model_path = os.path.join(MODEL_DIR, "model_demand.pth")
+    # if model_path is None:
+    #     model_path = os.path.join(MODEL_DIR, "model_demand.pth")
+    
+    # モデルファイルを Hub からダウンロード
+    model_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=DEMAND_MODEL,
+    )
     
     model = GRUModel()      
     model.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
@@ -74,8 +86,17 @@ def build_demand_features(weather: pd.DataFrame, sequence_length: int) -> pd.Dat
     # 非スケーリング列をそのまま抽出
     X_test_rest = X_test[non_scaled_cols].copy()
     
-    scaler_X = joblib.load("model/scaler_X.pkl")
-    scaler_y = joblib.load("model/scaler_y.pkl")
+    scaler_X_path= hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=SCALER_X_PATH,
+    )
+    scaler_y_path= hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=SCALER_Y_PATH,
+    )
+    
+    scaler_X = joblib.load(scaler_X_path)
+    scaler_y = joblib.load(scaler_y_path)
 
     X_test_scaled = scaler_X.transform(X_test[scaled_cols])
     X_test_scaled_df = pd.DataFrame(X_test_scaled, columns=scaled_cols, index=X_test.index)
@@ -149,7 +170,7 @@ def predict_demand():
 
     print(test_sequences.shape)  # (n_samples, sequence_length, num_features)
 
-    model = load_demand_model(model_path="model/model_demand.pth")
+    model = load_demand_model()
     model.to(device="cuda")
     test_loader = DataLoader(TensorDataset(test_sequences), batch_size=128, shuffle=False)
     

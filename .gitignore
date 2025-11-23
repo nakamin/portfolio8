@@ -16,6 +16,7 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 
-# model/*.pkl
-# model/*.pth
-# model/*.txt
+# hfでの管理に変更
+model/*.pkl
+model/*.pth
+model/*.txt
