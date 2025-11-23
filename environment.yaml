@@ -18,6 +18,7 @@ dependencies:
   - torchaudio=2.5.1
   - pytorch-cuda=12.4
   - lightgbm
+  - pygam
   - pyomo
   - huggingface_hub
   - tqdm
