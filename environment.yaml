@@ -4,7 +4,7 @@ channels:
   - nvidia
   - defaults
 dependencies:
-  - python=3.11.6
+  - python=3.11
   - pip
   - numpy
   - scipy
