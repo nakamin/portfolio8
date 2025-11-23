@@ -1,0 +1,36 @@
+name: op_py311
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11.6
+  - pip
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pytorch=2.5.1
+  - torchvision=0.20.1
+  - torchaudio=2.5.1
+  - pytorch-cuda=12.4
+  - tqdm
+  - pyyaml
+  - jupyterlab
+  - ipykernel
+  - notebook
+  - ipywidgets
+  - sqlalchemy
+  - chardet
+  - plotly
+  - streamlit
+  - pip:
+      - mlflow==2.17
+      - hydra-core
+      - requests
+      - mip
+      - pulp
+      - jpholiday
+      - cvxopt

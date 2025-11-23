@@ -1,0 +1,21 @@
+*/__pycache__
+__pycache__
+
+data/raw
+data/debug
+# data/cache
+# data/*.parquet
+# data/**/*.parquet
+# data/static/hero.png
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+# model/*.pkl
+# model/*.pth
+# model/*.txt

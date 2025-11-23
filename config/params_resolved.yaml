@@ -1,0 +1,121 @@
+dt_hours: 0.5
+reserve:
+  mode: ratio
+  rho: 0.03
+penalty:
+  curtail_pv: 5000
+  curtail_wind: 5000
+  shed: 1000000
+capacity:
+  long_term:
+    quantile: 0.995
+    margin: 1.05
+    avg_margin: 1.1
+  short_term:
+    recent_days: 7
+    alpha: 1.05
+  sources:
+    lng:
+      mode: estimate
+      stat: quantile
+    coal:
+      mode: estimate
+      stat: quantile
+    oil:
+      mode: estimate
+      stat: quantile
+    th_other:
+      mode: estimate
+      stat: quantile
+    hydro:
+      mode: estimate
+      stat: quantile
+    pstorage:
+      mode: estimate
+      stat: quantile
+    battery:
+      mode: estimate
+      stat: quantile
+    tie:
+      mode: estimate
+      stat: quantile
+    pv:
+      mode: external
+    wind:
+      mode: external
+    nuclear:
+      mode: fixed
+      P_max: 0
+    geothermal:
+      mode: fixed
+      P_max: 0
+    biomass:
+      mode: estimate
+      stat: avg
+    misc:
+      mode: estimate
+      stat: avg
+  pmax_today:
+    lng: 29768.067
+    coal: 8428.4025
+    oil: 1312.5
+    th_other: 2100.7559999999994
+    hydro: 2938.4039999999995
+    pstorage: 7250.270999999998
+    battery: 41.80049999999994
+    tie: 8058.4035
+    biomass: 476.6270735524257
+    misc: 366.36369327073555
+hydro:
+  P_max: 2938.0
+  RU: 150
+  RD: 150
+  E_day: 25000
+thermal:
+  coal:
+    P_max: 8428.0
+    RU: 300
+    RD: 300
+    c: 7000
+  oil:
+    P_max: 1312.0
+    RU: 300
+    RD: 300
+    c: 13000
+  lng:
+    P_max: 29768.0
+    RU: 300
+    RD: 300
+    c: 12000
+  th_other:
+    P_max: 2101.0
+    RU: 150
+    RD: 150
+    c: 11000
+  biomass:
+    P_max: 477.0
+    RU: 80
+    RD: 80
+    c: 5000
+  misc:
+    P_max: 366.0
+    RU: 100
+    RD: 100
+    c: 9000
+tie:
+  cap: 8058.0
+  c_import: 13000
+battery:
+  E_max: 2000
+  P_ch_max: 500
+  P_dis_max: 42.0
+  eta_ch: 0.95
+  eta_dis: 0.95
+  E0: 1000
+pstorage:
+  E_max: 10000
+  P_pump_max: 1500
+  P_gen_max: 7250.0
+  eta_pump: 0.9
+  eta_gen: 0.9
+  E0: 5000

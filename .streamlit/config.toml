@@ -1,0 +1,23 @@
+[theme]
+# 夜空ベースなので dark にした方がしっくりくる
+base = "dark"
+
+# 電気・雷っぽいイエロー（ボタンなどの強調色）
+primaryColor = "#ffd447"
+
+# 画面全体の背景（ほぼ黒に近い濃紺）
+backgroundColor = "#020922"
+
+# カードやサイドバーなどのサブ背景（少しだけ明るい紺）
+secondaryBackgroundColor = "#081836"
+
+# テキストはほぼ白寄りのグレー
+textColor = "#f5f5f5"
+
+# Streamlit は font に自由なフォント名は指定できず、
+# "sans serif" / "serif" / "monospace" の3種類だけが有効
+font = "sans serif"
+
+[server]
+port = 8501
+address = "localhost"

@@ -1,0 +1,77 @@
+# 時刻刻み（時間）
+dt_hours: 0.5
+
+# 予備率（需要の何%を上方予備で確保するか）
+reserve:
+  mode: ratio
+  rho: 0.03        # R_req_t = 3% * Load_t
+
+# ペナルティ（円/MWh）
+penalty:
+  curtail_pv: 5000     # 太陽光出力抑制のもったいなさ
+  curtail_wind: 5000   # 風力出力抑制のもったいなさ
+  shed: 1000000        # 需要未供給（停電）に対する巨大ペナルティ
+
+# P_max（最大出力）をどう決めるか
+capacity:
+  long_term:
+    quantile: 0.995    # 過去daily maxの上位0.5%点
+    margin: 1.05       # そこから+5%上振れを許容
+    avg_margin: 1.10 # 平均からP_maxを作る電源用
+  short_term:
+    recent_days: 7     # 直近7日間のmaxを見て
+    alpha: 1.05        # その1.05倍よりは上に行かないようにする
+  sources:
+    lng:       {mode: estimate, stat: quantile}   # 実績から推定
+    coal:      {mode: estimate, stat: quantile}
+    oil:       {mode: estimate, stat: quantile}
+    th_other:  {mode: estimate, stat: quantile}
+    hydro:     {mode: estimate, stat: quantile}
+    pstorage:  {mode: estimate, stat: quantile}   # 揚水（発電側出力）
+    battery:   {mode: estimate, stat: quantile}   # 蓄電池（放電側出力）
+    tie:       {mode: estimate, stat: quantile}   # 連系線（流入上限）
+    pv:        {mode: external}   # 気象から計算（P_maxは使わない）
+    wind:      {mode: external}
+    nuclear:   {mode: fixed, P_max: 0}
+    geothermal: {mode: fixed, P_max: 0}
+    biomass:   {mode: estimate, stat: avg}
+    misc:     {mode: estimate, stat: avg}
+
+# 水力（通常水力）
+hydro:
+  P_max: 2000        # capacity.mode=fixed のときだけ使用
+  RU: 150            # ランプ（上昇） MW/Δt
+  RD: 150            # ランプ（下降）
+  E_day: 25000       # 一日使えるエネルギー [MWh]
+
+# 火力（ここに P_max を後で上書きする）
+thermal:
+  coal: {P_max: 2500, RU: 300, RD: 300, c: 7000}
+  oil:  {P_max: 5000, RU: 300, RD: 300, c: 13000}
+  lng:  {P_max: 3500, RU: 300, RD: 300, c: 12000}
+  th_other: {P_max:  500, RU: 150, RD: 150, c: 11000}  # 火力(その他)
+  biomass: {P_max: 200, RU: 80, RD: 80, c: 5000}
+  misc:    {P_max: 300, RU: 100, RD: 100, c: 9000}
+
+# 連系線（系統間送電）
+tie:
+  cap: 1000          # 上限 MW （あとで estimate で上書きされうる）
+  c_import: 13000        # インポートの費用（安易に使われないように石油と同程度にする）LNG → 石炭 → バイオマス／その他 → 連系線 → それでもダメなら Shed
+
+# 蓄電池
+battery:
+  E_max: 2000        # MWh（容量）
+  P_ch_max: 500      # 充電上限 MW
+  P_dis_max: 500     # 放電上限 MW
+  eta_ch: 0.95
+  eta_dis: 0.95
+  E0: 1000           # 初期SoC [MWh]
+
+# 揚水発電（上池）
+pstorage:
+  E_max: 10000       # MWh
+  P_pump_max: 1500   # 揚水（消費）上限 MW
+  P_gen_max: 1500    # 発電上限 MW
+  eta_pump: 0.90
+  eta_gen: 0.90
+  E0: 5000           # 初期貯水量 [MWh]

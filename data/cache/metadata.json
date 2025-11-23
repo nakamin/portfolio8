@@ -1,0 +1,16 @@
+{
+  "last_updated_utc": "2025-11-23T05:44:28.998705+00:00",
+  "sources": {
+    "weather": "Open-Meteo JMA API",
+    "markets": {
+      "fx": "Frankfurter (ECB)",
+      "oil": "EIA / yfinance BZ=F",
+      "coal": "World Bank Pink Sheet",
+      "lng": "EIA / yfinance NG=F"
+    },
+    "jepx": "JEPX 日前スポット 東京エリア",
+    "demand_model": "自作需要予測モデル",
+    "price_model": "自作価格予測モデル",
+    "optimizer": "自作数理最適化モデル"
+  }
+}
