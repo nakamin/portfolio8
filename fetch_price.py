@@ -157,6 +157,7 @@ def select_quantity_table_only(page):
     - 約定総量: ON
     - それ以外: OFF
     """
+    page.wait_for_load_state("networkidle") # ページ全体が落ち着くまで待機
 
     # 入札・約定量の「テーブル側」スコープを取得
     scope = page.locator("#checkbox-volume--table")
@@ -166,8 +167,8 @@ def select_quantity_table_only(page):
             has=page.locator('h4.filter-sub-section__ttl', has_text="入札・約定量")
         )
         scope = section.locator(".checkbox-area--table")
-    scope.first.wait_for(state="attached", timeout=5000)
     scope = scope.first
+    scope.wait_for(state="visible", timeout=15000)
 
     # まず全て OFF
     for label in ["約定総量","売り入札量","買い入札量","売りブロック入札量",
