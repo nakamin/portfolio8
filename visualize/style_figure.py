@@ -18,11 +18,13 @@ def style_figure(
     - フォントサイズ
     - 軸タイトル
     - 目盛り間隔 (dtick)
+    - 凡例
     """
     fig.update_layout(
         paper_bgcolor=PAPER_BG_COLOR,
         plot_bgcolor=PLOT_BG_COLOR,
         font=dict(color=TEXT_COLOR, size=14),  # 全体のデフォルト文字サイズ
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
     )
 
     fig.update_xaxes(
@@ -50,5 +52,5 @@ def style_figure(
         fig.update_xaxes(dtick=x_dtick)
     if y_dtick is not None:
         fig.update_yaxes(dtick=y_dtick)
-
+    
     return fig

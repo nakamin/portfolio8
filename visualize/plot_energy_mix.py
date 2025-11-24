@@ -206,7 +206,6 @@ def plot_energy_mix(out_df: pd.DataFrame, now_floor):
         # title=title,
         yaxis2=dict(title="コスト", overlaying="y", side="right", showgrid=False),
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(l=60, r=60, t=60, b=40),
         height=560,
     )
