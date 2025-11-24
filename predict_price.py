@@ -1,7 +1,7 @@
 from pathlib import Path
 import joblib
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import lightgbm as lgb
 from typing import Optional, Any
@@ -180,8 +180,8 @@ def predict_price():
     price = pd.read_parquet(PRICE_PATH)
     print("price\n", price)
     
-
-    today = pd.Timestamp(datetime.today().date())
+    JST = timezone(timedelta(hours=9))
+    today = pd.Timestamp(datetime.now(JST).date())
     tomorrow = today + timedelta(days=1)
 
     features_df, pred_time = build_price_features(demand, weather, market, price, tomorrow)

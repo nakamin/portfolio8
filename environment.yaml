@@ -24,18 +24,18 @@ dependencies:
   - huggingface_hub
   - tqdm
   - pyyaml
-  - jupyterlab
-  - ipykernel
-  - notebook
-  - ipywidgets
+  # - jupyterlab
+  # - ipykernel
+  # - notebook
+  # - ipywidgets
   - sqlalchemy
   - chardet
   - plotly
   - streamlit
   - openpyxl
   - pip:
-      - mlflow==2.17
-      - hydra-core
+      # - mlflow==2.17
+      # - hydra-core
       - requests
       - mip
       - pulp

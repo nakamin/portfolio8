@@ -116,7 +116,8 @@ def fetch_demand():
     """当月CSVをDLして前日分とバンド（同月同時刻のmin/max）を用意する"""
 
     # 昨日の日付起算で当月を取得
-    today = datetime.now()
+    today = datetime.now(JST)
+    print(f"Today: {today}")
     before_1w = (today - timedelta(days=7)).date()
     yesterday = (today - timedelta(days=1)).date()
     target_ym = before_1w.strftime("%Y%m")
