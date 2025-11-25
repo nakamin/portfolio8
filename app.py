@@ -57,21 +57,23 @@ def _read_parquet_local(path: Path) -> pd.DataFrame:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
     return df
 
+@st.cache_data(show_spinner=False)
 def show_hero():
     if RUN_ENV == "hf":
         # HF では GitHub の画像を直接表示
-        st.image(HERO_GITHUB_URL, use_container_width=True)
+        st.image(HERO_GITHUB_URL, width="stretch")
     else:
         hero_path = STATIC_DIR / "hero.png"
         if hero_path.exists():
-            st.image(str(hero_path), use_container_width=True, width=800)
+            st.image(str(hero_path), width="stretch")
 
 @st.cache_data(show_spinner=False)
-def load_parquet(name: str) -> pd.DataFrame | None:
+def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | None:
     """
     name: 'demand_forecast' のようなベース名
     - local: data/cache/{name}.parquet
     - hf:    GitHub raw の data/cache/{name}.parquet
+    - version_key: これが変わるとキャッシュが無効化されて再読込される
     """
     try:
         if RUN_ENV == "hf":
@@ -85,7 +87,6 @@ def load_parquet(name: str) -> pd.DataFrame | None:
         st.error(f"{name}.parquet を読み込めませんでした: {e}")
         return None
 
-@st.cache_data(show_spinner=False)
 def load_metadata() -> dict:
     """
     メタ情報（sources, last_updated など）を取得
@@ -117,6 +118,14 @@ def jst_now_floor_30min() -> datetime:
     minute = 0 if now.minute < 30 else 30
     return now.replace(minute=minute, second=0, microsecond=0)
 
+def render_footer():
+    with st.container():
+        st.divider()
+        st.markdown(
+    "<p style='text-align: center; color: gray;'>© 2025 nakamin</p>",
+    unsafe_allow_html=True
+)
+
 # ========================
 # ヘッダー（画像・説明・現在時刻）
 # ========================
@@ -128,12 +137,13 @@ def main():
     st.caption(f"現在時刻（JST）: {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
     meta = load_metadata()
-    if meta.get("last_updated_utc"):
-        last_utc = datetime.fromisoformat(meta["last_updated_utc"])
-        last_jst = last_utc.astimezone(JST)
+    if meta.get("last_updated_jst"):
+        last_jst = datetime.fromisoformat(meta["last_updated_jst"])
         st.caption(f"データ更新時刻: {last_jst.strftime('%Y-%m-%d %H:%M')}（自動更新日時）")
     else:
         st.caption("データ更新時刻: 不明")
+    
+    version = meta.get("last_updated_utc", "no-meta")
 
     now_floor = jst_now_floor_30min()
     today = now_floor.date()
@@ -151,13 +161,13 @@ def main():
 
         st.subheader("1. 電力需要（実績＋予測）")
 
-        demand = load_parquet("demand_forecast")      # predicted_demand / realized_demand / demand など
+        demand = load_parquet("demand_forecast", version_key=version)      # predicted_demand / realized_demand / demand など
         if demand is None:
             st.stop()
         print("demand: \n", demand)
 
         fig_d = plot_demand(demand, now_floor)
-        st.plotly_chart(fig_d, use_container_width=True)
+        st.plotly_chart(fig_d, width="stretch")
         st.markdown(
         f"""
         <h4 style="text-align:center; margin-top: 1rem;">
@@ -175,7 +185,7 @@ def main():
 
         st.subheader("2. JEPX 東京スポット価格と分位点予測")
 
-        price_fc = load_parquet("price_forecast")          # price / predicted_price(10/50/90) / tokyo_price_jpy_per_kwh
+        price_fc = load_parquet("price_forecast", version_key=version)          # price / predicted_price(10/50/90) / tokyo_price_jpy_per_kwh
         if price_fc is None:
             st.stop()
         print("price_fc: \n", price_fc)
@@ -200,7 +210,7 @@ def main():
 
         st.subheader("3. エネルギーミックス（最適化結果）")
 
-        dispatch = load_parquet("dispatch_optimal")
+        dispatch = load_parquet("dispatch_optimal", version_key=version)
         if dispatch is None:
             st.stop()
         print("dispatch: \n", dispatch)
@@ -382,35 +392,7 @@ def main():
                     save_contact(name, email, message)
                     st.success("メッセージを送信しました。")
 
-    st.markdown(
-        """
-    <style>
-    /* 本文がフッターに隠れないように下に余白を足す */
-    .main .block-container {
-        padding-bottom: 4rem;
-    }
-
-    /* 画面下に張り付くフッター */
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;               /* ここで画面いっぱいにする */
-        background-color: #010814;  /* 本体より少し暗め */
-        text-align: center;
-        color: #999999;
-        font-size: 0.8rem;
-        padding: 0.6rem 0;
-        z-index: 1000;              /* グラフより手前に出す */
-    }
-    </style>
-
-    <div class="footer">
-    © 2025 nakamin
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
+    render_footer()
 
 if __name__ == "__main__":
     try:
