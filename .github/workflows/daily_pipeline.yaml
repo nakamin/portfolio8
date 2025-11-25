@@ -2,7 +2,7 @@ name: Run daily pipeline
 
 on:
   schedule:
-    - cron: '30 15 * * *'   # JST 00:30
+    - cron: '0 21 * * *'   # JST 6:00
   workflow_dispatch:   # 手動実行もできるように
 
 permissions:

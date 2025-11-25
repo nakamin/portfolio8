@@ -4,7 +4,7 @@
 
 from pathlib import Path
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fetch_weather import fetch_weather
 from fetch_market import fetch_market
@@ -43,7 +43,7 @@ def main():
 
     # ========== 5. メタ情報（更新時刻＋出典） ==========
     meta = {
-        "last_updated_utc": datetime.now(timezone.utc).isoformat(),
+        "last_updated_jst": datetime.now(timezone(timedelta(hours=9))).isoformat(),
         "sources": {
             "weather": "Open-Meteo JMA API",
             "markets": {

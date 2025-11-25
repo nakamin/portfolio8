@@ -1,13 +1,17 @@
 from datetime import datetime, timedelta, timezone
 import re, os, time
 import pandas as pd
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 JST = timezone(timedelta(hours=9))
-CACHE_DIR = "data/cache"
-RAW_DIR = "data/raw"
-DEBUG_DIR = "data/debug"
+CACHE_DIR = Path("data/cache")
+RAW_DIR = Path("data/raw")
+DEBUG_DIR = Path("data/debug")
+
+RAW_OUT  = RAW_DIR / "spot_tokyo_year.csv"
+PROC_OUT = CACHE_DIR / "spot_tokyo_bf1w_tdy.parquet"
 
 URL = "https://www.jepx.jp/electricpower/market-data/spot/"
 
@@ -151,13 +155,13 @@ def select_price_table_only(page):
     for name in ["北海道","東北","東京","中部","北陸","関西","中国","四国","九州"]:
         _set_by_label(scope, name, (name == "東京"))
 
-def select_quantity_table_only(page):
+def select_quantity_table_only(page) -> bool:
     """
     入札・約定量（テーブル側）:
     - 約定総量: ON
     - それ以外: OFF
     """
-    page.wait_for_load_state("networkidle") # ページ全体が落ち着くまで待機
+    page.wait_for_load_state("networkidle")  # ページ全体が落ち着くまで待機
 
     # 入札・約定量の「テーブル側」スコープを取得
     scope = page.locator("#checkbox-volume--table")
@@ -166,26 +170,56 @@ def select_quantity_table_only(page):
         section = page.locator("section.filter-sub-section").filter(
             has=page.locator('h4.filter-sub-section__ttl', has_text="入札・約定量")
         )
-        scope = section.locator(".checkbox-area--table")
-    scope = scope.first
-    scope.wait_for(state="visible", timeout=15000)
+        if section.count() == 0:
+            print("[WARN] 入札・約定量セクションが見つからない")
+            return False
+        scope = section.locator(".checkbox-area--table").first
+    else:
+        scope = scope.first
+
+    try:
+        scope.wait_for(state="visible", timeout=15000)
+    except PlaywrightTimeoutError:
+        print("[WARN] 入札・約定量のcheckbox-area--table が visible にならなかった")
+        return False
 
     # まず全て OFF
-    for label in ["約定総量","売り入札量","買い入札量","売りブロック入札量",
-                "買いブロック入札量","売りブロック約定量","買いブロック約定量"]:
+    for label in [
+        "約定総量","売り入札量","買い入札量","売りブロック入札量",
+        "買いブロック入札量","売りブロック約定量","買いブロック約定量"
+    ]:
         try:
             _set_by_label(scope, label, False)
         except Exception:
-            pass  # ないラベルは無視
+            # 存在しないラベルは無視
+            pass
 
-    # 3つだけON
+    # 3つだけ ON
     for lb in ["約定総量","売り入札量","買い入札量"]:
         _set_by_label(scope, lb, True)
 
+    return True
+
+def fallback_price_from_yesterday():
+    """昨日の price cache を 1 日ずらして今日のデータとして再保存"""
+
+    if not PROC_OUT.exists():
+        print(f"[ERROR] fallback: {PROC_OUT} が存在しません")
+        return False
+
+    df = pd.read_parquet(PROC_OUT)
+    if "timestamp" not in df.columns:
+        print("[ERROR] fallback: timestamp がありません")
+        return False
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"]) + timedelta(days=1)
+    df.to_parquet(PROC_OUT, index=False)
+
+    print("[INFO] fallback: yesterday's price used instead (shifted +1 day)")
+    return True
+
 def fetch_price():
-    raw_out  = os.path.join(RAW_DIR, "spot_tokyo_year.csv")
-    proc_out = os.path.join(CACHE_DIR, "spot_tokyo_bf1w_tdy.parquet")
-    
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(accept_downloads=True, locale="ja-JP", timezone_id="Asia/Tokyo")
@@ -207,7 +241,15 @@ def fetch_price():
         select_price_table_only(page)
         # 「入札・約定量」：チェックを外して「約定総量」のみ
         print("Select a kind of price")
-        select_quantity_table_only(page)
+        ok = select_quantity_table_only(page)
+        
+        if not ok:
+            print("[WARN] price UI が取れないので fallback に切り替え")
+            if fallback_price_from_yesterday():
+                return
+            else:
+                print("[ERROR] fallback にも失敗 → 価格更新スキップ")
+                return
 
         # 「データダウンロード」をクリック → 年度選択ポップアップ → 下部のダウンロードをクリック
         print("Push data download")
@@ -223,14 +265,14 @@ def fetch_price():
             # name指定だと再び曖昧なので、モーダルを scope にして type=submit を叩く
             modal.locator('button.dl-button[type="submit"]').click()
         download = dlinfo.value
-        download.save_as(raw_out)
-        print(f"[OK] saved: {raw_out}")
+        download.save_as(RAW_OUT)
+        print(f"[OK] saved: {RAW_OUT}")
         
         # 成功トレースも見たいときは保存
         page.context.tracing.stop(path=os.path.join(DEBUG_DIR, "trace_success.zip"))
 
     df = None
-    df = pd.read_csv(filepath_or_buffer=raw_out, encoding="cp932")
+    df = pd.read_csv(filepath_or_buffer=RAW_OUT, encoding="cp932")
 
     # 列名
     col_date = next(c for c in df.columns if "受渡日" in c)
@@ -266,8 +308,8 @@ def fetch_price():
     final_out.reset_index(drop=True, inplace=True)
     print("シフト後: \n", final_out)
     
-    final_out.to_parquet(proc_out, index=False)
-    print(f"[OK] wrote filtered parquet (clean): {proc_out}  rows={len(final_out)}")
+    final_out.to_parquet(PROC_OUT, index=False)
+    print(f"[OK] wrote filtered parquet (clean): {PROC_OUT}  rows={len(final_out)}")
 
 if __name__ == "__main__":
     fetch_price()
