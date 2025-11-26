@@ -61,11 +61,11 @@ def _read_parquet_local(path: Path) -> pd.DataFrame:
 def show_hero():
     if RUN_ENV == "hf":
         # HF では GitHub の画像を直接表示
-        st.image(HERO_GITHUB_URL, width="stretch")
+        st.image(HERO_GITHUB_URL)
     else:
         hero_path = STATIC_DIR / "hero.png"
         if hero_path.exists():
-            st.image(str(hero_path), width="stretch")
+            st.image(str(hero_path))
 
 @st.cache_data(show_spinner=False)
 def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | None:
@@ -118,14 +118,6 @@ def jst_now_floor_30min() -> datetime:
     minute = 0 if now.minute < 30 else 30
     return now.replace(minute=minute, second=0, microsecond=0)
 
-def render_footer():
-    with st.container():
-        st.divider()
-        st.markdown(
-    "<p style='text-align: center; color: gray;'>© 2025 nakamin</p>",
-    unsafe_allow_html=True
-)
-
 # ========================
 # ヘッダー（画像・説明・現在時刻）
 # ========================
@@ -167,7 +159,7 @@ def main():
         print("demand: \n", demand)
 
         fig_d = plot_demand(demand, now_floor)
-        st.plotly_chart(fig_d, width="stretch")
+        st.plotly_chart(fig_d)
         st.markdown(
         f"""
         <h4 style="text-align:center; margin-top: 1rem;">
@@ -191,7 +183,7 @@ def main():
         print("price_fc: \n", price_fc)
 
         fig_p = plot_price(price_fc=price_fc, now_floor=now_floor)
-        st.plotly_chart(fig_p, width='stretch')
+        st.plotly_chart(fig_p)
         
         st.markdown(
             f"""
@@ -216,7 +208,7 @@ def main():
         print("dispatch: \n", dispatch)
 
         fig_balance = plot_energy_mix(dispatch, now_floor)
-        st.plotly_chart(fig_balance, width='stretch')
+        st.plotly_chart(fig_balance)
         
         st.markdown(
         f"""
@@ -392,7 +384,34 @@ def main():
                     save_contact(name, email, message)
                     st.success("メッセージを送信しました。")
 
-    render_footer()
+    st.markdown(
+        """
+    <style>
+    /* 本文がフッターに隠れないように下に余白を足す */
+    .main .block-container {
+        padding-bottom: 4rem;
+    }
+
+    .footer {
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;               /* ここで画面いっぱいにする */
+        background-color: #010814;  /* 本体より少し暗め */
+        text-align: center;
+        color: #999999;
+        font-size: 0.8rem;
+        padding: 0.6rem 0;
+        z-index: 1000;              /* グラフより手前に出す */
+    }
+    </style>
+
+    <div class="footer">
+    © 2025 nakamin
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
 
 if __name__ == "__main__":
     try:

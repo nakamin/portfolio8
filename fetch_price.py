@@ -287,7 +287,7 @@ def fetch_price():
     out["date"] = pd.to_datetime(out["date"])
 
     # 過去1週間分だけ切り出して保存
-    today = pd.Timestamp(datetime.today().date())
+    today = pd.Timestamp(datetime.now(JST).date())
     before_1w = today - timedelta(days=7)
     tomorrow = today + timedelta(days=1)
     print(f"[FILTER] {before_1w} to {today}")
