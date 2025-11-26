@@ -216,6 +216,7 @@ def fallback_price_from_yesterday():
     df.to_parquet(PROC_OUT, index=False)
 
     print("[INFO] fallback: yesterday's price used instead (shifted +1 day)")
+    print(df)
     return True
 
 def fetch_price():
