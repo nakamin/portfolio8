@@ -15,6 +15,8 @@ DATA_DIR = Path("data")
 ACTUAL_PATH = DATA_DIR / "actual.parquet"
 DEMAND_PATH = CACHE_DIR / "demand_bf1w_ytd.parquet"
 
+UPDATE_ACTION_DAY = 8
+
 columns = [
     "date", "time", "demand", "nuclear",
     "lng", "coal", "oil", "th_other",
@@ -45,53 +47,43 @@ def _get_month_csv_url(session: requests.Session, target_ym) -> str:
 
     return [complete_url(link) for link in filtered]
 
-def read_csv(path: str) -> pd.DataFrame:
+def read_demand_csv(content: str) -> pd.DataFrame:
     # 1行目を読み込んで、混在しているか確認
-    with open(path, encoding="MacRoman") as f:
-        first_line = f.readline()
-        rest = f.readlines()
+    first_line =  content.splitlines()[0]
 
     # 1行目を分割して、カラム数より多ければ混在していると判断
     first_split = first_line.strip().split(",")
     if len(first_split) > len(columns):
+        print("Misalignment is found")
         # 最初のデータ行を抽出（カラム数分以降）
         first_data = first_split[len(columns):]
         # 2行目以降をDataFrameとして読み込む
-        df = pd.read_csv(path, encoding="MacRoman", skiprows=1, header=None)
+        df = pd.read_csv(StringIO(content), encoding="MacRoman", skiprows=1, header=None)
         df.columns = columns
         # 最初のデータ行を先頭に挿入
         first_row = pd.DataFrame([first_data], columns=columns)
         df = pd.concat([first_row, df], ignore_index=True)
     else:
         # 通常通り読み込む
-        df = pd.read_csv(path, encoding="MacRoman", skiprows=1, header=None)
+        df = pd.read_csv(StringIO(content), encoding="MacRoman", skiprows=2, header=None) # requestするときはずれがないのでこっちになる
         df.columns = columns
+    
+    print("df: ", df)
+    df["timestamp"] = pd.to_datetime(df["date"] + " " + df["time"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["realized_demand"] = df["demand"].astype("float64")
+    
+    df.drop(columns=["date", "time", "demand"], inplace=True)
 
     return df
 
-def update_actual_last_month(df, today, actuion_day):
-    # 毎月8日以外は何もしない
-    if today.day != actuion_day:
-        print(f"[update_actual] today.day != {actuion_day} → skip")
-        return
-    
-    # 先月の 1日〜末日を計算
-    first_this_month = today.date().replace(day=1)
-    last_month_end = first_this_month - timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
-    
-    print(f"[update_actual] last month = {last_month_start} 〜 {last_month_end}")
-
-    # 先月分だけ切り出し
-    mask = (
-        (df["timestamp"].dt.date >= last_month_start)
-        & (df["timestamp"].dt.date <= last_month_end)
-    )
-    last_month_df = df.loc[mask].copy()
+def update_actual_last_month(last_month_df):
     
     if last_month_df.empty:
         print("[update_actual] last_month_df is empty → skip")
         return
+    
+    print("last_month_df: ", last_month_df)
     
     # timestamp を index にして、長期用フォーマットに揃える
     last_month_df = last_month_df.set_index("timestamp").sort_index()
@@ -106,6 +98,7 @@ def update_actual_last_month(df, today, actuion_day):
     else:
         combined = last_month_df
     
+    combined.drop(columns=["date", "time"], inplace=True)
     print("combined: \n", combined)
 
     # 書き出し
@@ -137,23 +130,30 @@ def fetch_demand():
         
         print("csv_url: ", csv_url)
         response = s.get(csv_url[0], timeout=30)
-        response.encoding = "MacRoman"  # TEPCOのCSVはShift-JIS
+        response.encoding = "MacRoman"
         content = response.content.decode("MacRoman")  # bytes → str
 
         # CSV文字列をファイルのように扱う
-        df = pd.read_csv(StringIO(content), skiprows=2, header=None)
-        df.columns = columns
+        # df = pd.read_csv(StringIO(content), skiprows=2, header=None)
+        df = read_demand_csv(content)
+        # df.columns = columns
     
     if df is None:
         print("We could not get csv itself, so update the demand.")
         return 
-    
-    df["timestamp"] = pd.to_datetime(df["date"] + " " + df["time"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["realized_demand"] = df["demand"].astype("float64")
-    
-    df.drop(columns=["date", "time", "demand"], inplace=True)
-    update_actual_last_month(df, today, 8)
+
+    # 毎月8日以外は何もしない
+    if today.day == UPDATE_ACTION_DAY:
+        print(f"[update_actual] today.day == {UPDATE_ACTION_DAY} → concat") # optimizeのときのestimate_pmax_long_termで使用するactual.parquetが更新される
+        
+        prev_month_ym = (before_1w - timedelta(days=31)).strftime("%Y%m")
+        csv_url = _get_month_csv_url(session=s, target_ym=prev_month_ym)
+        print("csv_url: ", csv_url)
+        response = s.get(csv_url[0], timeout=30)
+        response.encoding = "MacRoman"
+        content = response.content.decode("MacRoman")  # bytes → str
+        last_month_df = read_demand_csv(content)
+        update_actual_last_month(last_month_df)
     
     # 1週間前から昨日までを抽出
     prev = df[(df["timestamp"].dt.date >= before_1w)&(df["timestamp"].dt.date <= yesterday)].copy().reset_index(drop=True)
