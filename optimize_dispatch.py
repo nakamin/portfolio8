@@ -177,44 +177,44 @@ def solve_dispatch(df_ts, costs, params, init_state):
     ps_conf = params["pstorage"]
 
     # 変数
-    m.P_pv   = Var(m.T, domain=NonNegativeReals)
-    m.P_wind = Var(m.T, domain=NonNegativeReals)
-    m.Curt_pv   = Var(m.T, domain=NonNegativeReals)
-    m.Curt_wind = Var(m.T, domain=NonNegativeReals)
+    m.P_pv   = Var(m.T, within=NonNegativeReals)
+    m.P_wind = Var(m.T, within=NonNegativeReals)
+    m.Curt_pv   = Var(m.T, within=NonNegativeReals)
+    m.Curt_wind = Var(m.T, within=NonNegativeReals)
 
-    m.P_hy   = Var(m.T, domain=NonNegativeReals)
-    m.P_coal = Var(m.T, domain=NonNegativeReals)
-    m.P_oil  = Var(m.T, domain=NonNegativeReals)
-    m.P_lng  = Var(m.T, domain=NonNegativeReals)
-    m.P_th_other  = Var(m.T, domain=NonNegativeReals)
-    m.P_biomass = Var(m.T, domain=NonNegativeReals)
-    m.P_misc   = Var(m.T, domain=NonNegativeReals)
+    m.P_hy   = Var(m.T, within=NonNegativeReals)
+    m.P_coal = Var(m.T, within=NonNegativeReals)
+    m.P_oil  = Var(m.T, within=NonNegativeReals)
+    m.P_lng  = Var(m.T, within=NonNegativeReals)
+    m.P_th_other  = Var(m.T, within=NonNegativeReals)
+    m.P_biomass = Var(m.T, within=NonNegativeReals)
+    m.P_misc   = Var(m.T, within=NonNegativeReals)
 
-    m.R_hy   = Var(m.T, domain=NonNegativeReals)
-    m.R_coal = Var(m.T, domain=NonNegativeReals)
-    m.R_oil  = Var(m.T, domain=NonNegativeReals)
-    m.R_lng  = Var(m.T, domain=NonNegativeReals)
-    m.R_th_other  = Var(m.T, domain=NonNegativeReals)
-    m.R_biomass = Var(m.T, domain=NonNegativeReals)
-    m.R_misc   = Var(m.T, domain=NonNegativeReals)
+    m.R_hy   = Var(m.T, within=NonNegativeReals)
+    m.R_coal = Var(m.T, within=NonNegativeReals)
+    m.R_oil  = Var(m.T, within=NonNegativeReals)
+    m.R_lng  = Var(m.T, within=NonNegativeReals)
+    m.R_th_other  = Var(m.T, within=NonNegativeReals)
+    m.R_biomass = Var(m.T, within=NonNegativeReals)
+    m.R_misc   = Var(m.T, within=NonNegativeReals)
 
-    m.Shed   = Var(m.T, domain=NonNegativeReals)  # 未供給（停電）
+    m.Shed   = Var(m.T, within=NonNegativeReals)  # 未供給（停電）
 
     # 連系線（インポート）
-    m.P_imp  = Var(m.T, domain=NonNegativeReals)  # 流入
-    m.R_imp  = Var(m.T, domain=NonNegativeReals)  # 予備力としての余力
+    m.P_imp  = Var(m.T, within=NonNegativeReals)  # 流入
+    m.R_imp  = Var(m.T, within=NonNegativeReals)  # 予備力としての余力
 
     # 蓄電池
-    m.P_ch   = Var(m.T, domain=NonNegativeReals)  # 充電
-    m.P_dis  = Var(m.T, domain=NonNegativeReals)  # 放電
-    m.E_bat  = Var(m.T, domain=NonNegativeReals)  # SoC
-    m.R_bat  = Var(m.T, domain=NonNegativeReals)  # 上方予備
+    m.P_ch   = Var(m.T, within=NonNegativeReals)  # 充電
+    m.P_dis  = Var(m.T, within=NonNegativeReals)  # 放電
+    m.E_bat  = Var(m.T, within=NonNegativeReals)  # SoC
+    m.R_bat  = Var(m.T, within=NonNegativeReals)  # 上方予備
 
     # 揚水
-    m.P_pump = Var(m.T, domain=NonNegativeReals)  # 揚水（消費）
-    m.P_gen  = Var(m.T, domain=NonNegativeReals)  # 発電
-    m.E_ps   = Var(m.T, domain=NonNegativeReals)
-    m.R_ps   = Var(m.T, domain=NonNegativeReals)
+    m.P_pump = Var(m.T, within=NonNegativeReals)  # 揚水（消費）
+    m.P_gen  = Var(m.T, within=NonNegativeReals)  # 発電
+    m.E_ps   = Var(m.T, within=NonNegativeReals)
+    m.R_ps   = Var(m.T, within=NonNegativeReals)
 
     # 目的関数：燃料費 + 抑制ペナルティ + インポートコスト + 停電ペナルティ
     def obj_rule(_):
@@ -240,14 +240,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
     m.PV_av = Param(m.T, initialize=pv_av, within=Reals)
     m.W_av = Param(m.T, initialize=w_av, within=Reals)
 
-    def pv_rule(_, t):
-        return m.P_pv[t] + m.Curt_pv[t] == m.PV_av[t]
-
-    def wind_rule(_, t):
-        return m.P_wind[t] + m.Curt_wind[t] == m.W_av[t]
-
-    m.PVAvail = Constraint(m.T, rule=pv_rule)
-    m.WindAvail = Constraint(m.T, rule=wind_rule)
+    m.PVAvail   = Constraint(m.T, rule=lambda _, t: m.P_pv[t]   + m.Curt_pv[t]   == m.PV_av[t])
+    m.WindAvail = Constraint(m.T, rule=lambda _, t: m.P_wind[t] + m.Curt_wind[t] == m.W_av[t])
 
     # 出力上限（P_max - 予備力）
     m.CapHy = Constraint(m.T, rule=lambda _, t: m.P_hy[t] <= Pmax_hy - m.R_hy[t])
@@ -403,7 +397,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "shed":    [value(m.Shed[t])    for t in T],
         "predicted_demand":[load[t] for t in T],
     })
-    out["total_cost"] = (
+    out["total_cost"] = dt * (
         out["coal"]*costs["coal"] +
         out["oil"]*costs["oil"] +
         out["lng"]*costs["lng"] +
