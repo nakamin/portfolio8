@@ -80,7 +80,7 @@ def plot_price(price_fc, now_floor):
         x_title="日時",
         y_title="価格 [円/kWh]",
         x_dtick=six_hours_ms,  # グリッドを細かく
-        y_dtick=1000,
+        y_dtick=10,
     )
     fig_p.update_xaxes(tickangle=-45)
     

@@ -59,13 +59,15 @@ def _read_parquet_local(path: Path) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def show_hero():
-    if RUN_ENV == "hf":
-        # HF では GitHub の画像を直接表示
-        st.image(HERO_GITHUB_URL)
-    else:
-        hero_path = STATIC_DIR / "hero.png"
-        if hero_path.exists():
-            st.image(str(hero_path))
+    _, col, _ = st.columns([1, 20, 1])  # 真ん中のカラムを広めに
+    with col:
+        if RUN_ENV == "hf":
+            # HF では GitHub の画像を直接表示
+            st.image(HERO_GITHUB_URL)
+        else:
+            hero_path = STATIC_DIR / "hero.png"
+            if hero_path.exists():
+                st.image(str(hero_path))
 
 @st.cache_data(show_spinner=False)
 def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | None:
@@ -123,6 +125,15 @@ def jst_now_floor_30min() -> datetime:
 # ========================
 
 def main():
+    
+    # st.caption(f"RUN_ENV = {RUN_ENV}")
+
+    # meta = load_metadata()
+    # st.caption(f"meta keys = {list(meta.keys())}")
+    # st.caption(f"last_updated_jst = {meta.get('last_updated_jst')}")
+    # version = meta.get("last_updated_jst", "no-meta")
+    # st.caption(f"version_key = {version}")
+    
     show_hero()
 
     now_jst = datetime.now(JST)
@@ -135,7 +146,7 @@ def main():
     else:
         st.caption("データ更新時刻: 不明")
     
-    version = meta.get("last_updated_utc", "no-meta")
+    version = meta.get("last_updated_jst", "no-meta")
 
     now_floor = jst_now_floor_30min()
     today = now_floor.date()
@@ -383,15 +394,12 @@ def main():
                 else:
                     save_contact(name, email, message)
                     st.success("メッセージを送信しました。")
+    st.empty()
+    st.markdown("<div style='height:100px;'></div>", unsafe_allow_html=True)
 
     st.markdown(
         """
     <style>
-    /* 本文がフッターに隠れないように下に余白を足す */
-    .main .block-container {
-        padding-bottom: 4rem;
-    }
-
     .footer {
         position: fixed;
         left: 0;

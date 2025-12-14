@@ -384,8 +384,10 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "misc":   [value(m.P_misc[t])   for t in T],
         "pstorage_gen": [value(m.P_gen[t])  for t in T],
         "pstorage_pump":[value(m.P_pump[t]) for t in T],
+        "pstorage_soc":  [value(m.E_ps[t])  for t in T],
         "battery_dis":  [value(m.P_dis[t])  for t in T],
         "battery_ch":   [value(m.P_ch[t])   for t in T],
+        "battery_soc":   [value(m.E_bat[t]) for t in T],
         "import":       [value(m.P_imp[t])  for t in T],
         "curtail_pv":   [value(m.Curt_pv[t])   for t in T],
         "curtail_wind": [value(m.Curt_wind[t]) for t in T],
@@ -457,6 +459,10 @@ def optimize_dispatch():
     tz = pytz.timezone("Asia/Tokyo")
     today = datetime.now(tz).date()
     # today = datetime.now(tz).date() - timedelta(days=1)
+    
+    yesterday = today - timedelta(days=1)
+    yesterday_2330 = pd.Timestamp(pd.Timestamp(datetime.combine(yesterday, time(23, 30))))
+    
     params_raw = load_params(CONFIG_PATH)
     actual = pd.read_parquet(ACTUAL_DEMAND_PATH) # 2024年2月～前月まで
     print("actual: ", actual)
@@ -465,7 +471,21 @@ def optimize_dispatch():
     demand.set_index("timestamp", inplace=True)
     print("demand: ", demand)
     
+    ytd_out = pd.read_parquet(DEMAND_PATH)
+    print("ytd_out: ", ytd_out)
+    
+    # 前日から引き継いだ残量
+    prev_soc_row = ytd_out.loc[ytd_out["timestamp"] == yesterday_2330]
+    
     params_today = apply_pmax_from_actuals(params_raw, actual, demand, today)
+
+    if not prev_soc_row.empty:
+        row = prev_soc_row.iloc[0]
+        if "battery_soc" in row:
+            params_today["battery"]["E0"] = float(row["battery_soc"])
+        if "pstorage_soc" in row:
+            params_today["pstorage"]["E0"] = float(row["pstorage_soc"])
+            
     print("params_today: ", params_today)
     save_params(params_today, CONFIG_RESOLVED_PATH)
 
@@ -505,9 +525,6 @@ def optimize_dispatch():
 
     # --- 時系列を結合（最適化で使う） ---
     df_ts = pv_wind.merge(demand, how="left", left_on="timestamp", right_index=True)
-    
-    yesterday = today - timedelta(days=1)
-    yesterday_2330 = pd.Timestamp(pd.Timestamp(datetime.combine(yesterday, time(23, 30))))
 
     prev_row = demand.loc[[yesterday_2330]]
 

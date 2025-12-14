@@ -192,12 +192,12 @@ def plot_energy_mix(out_df: pd.DataFrame, now_floor):
         align="center"
     )  
 
-    six_hours_ms = 6 * 60 * 60 * 1000  # 6時間ごとに縦グリッド
+    one_hours_ms = 60 * 60 * 1000  # 1時間ごとに縦グリッド
     fig = style_figure(
         fig,
         x_title="時刻",
         y_title="電力 [MW]",
-        x_dtick=six_hours_ms,  # グリッドを細かく
+        x_dtick=one_hours_ms,  # グリッドを細かく
         y_dtick=1000,
     )
 
