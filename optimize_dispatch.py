@@ -12,7 +12,7 @@ from pyomo.environ import (
     Objective, Constraint, ConstraintList, minimize, value, SolverFactory
 )
 
-from utils.prepare_opt import prepare_opt, effective_pmax
+from utils.prepare_opt import prepare_opt, effective_pmax, PV_PR, G_STC
 
 CACHE_DIR = Path("data/cache")
 DATA_DIR = Path("data")
@@ -453,6 +453,55 @@ def _history_series(
         s_all = s_all.clip(lower=0.0)
     return s_all
 
+def _history_shortwave_series(today: str | pd.Timestamp,
+                            recent_days: int = 7,
+                            path: Path = WEATHER_PATH) -> pd.Series | None:
+    """直近recent_daysの全天日射（W/m^2）を Series[timestamp] で返す"""
+    end = today - pd.Timedelta(minutes=30)   # 「今日」は予測用なので、実績側は昨日23:30まで
+    start = end - pd.Timedelta(days=recent_days)
+
+    w = pd.read_parquet(path)
+    w["timestamp"] = pd.to_datetime(w["timestamp"])
+    w = w.set_index("timestamp").sort_index()
+
+    if "shortwave_radiation" not in w.columns:
+        return None
+
+    sw = w.loc[start:end, "shortwave_radiation"].astype(float)
+    sw = sw.replace([np.inf, -np.inf], np.nan).dropna()
+    return sw if not sw.empty else None
+
+def estimate_pv_cap_from_radiation(
+    pv_actual_mw: pd.Series,              # index: timestamp, value: pv MW
+    shortwave_wm2: pd.Series,             # index: timestamp, value: W/m^2
+    pv_pr: float = 0.85,
+    g_stc: float = 1000.0,
+    recent_days: int = 7,
+    q: float = 0.98,                      # 0.95〜0.99くらいが現実的
+    min_cf: float = 0.15,                 # 夜/弱日射を除外
+) -> float:
+    # 期間を切る
+    end = pv_actual_mw.index.max()
+    start = end - pd.Timedelta(days=recent_days)
+    pv = pv_actual_mw.loc[start:end].astype(float)
+    sw = shortwave_wm2.loc[start:end].astype(float)
+
+    # cf（0〜1）
+    cf = ((sw.clip(lower=0.0) / g_stc) * pv_pr).clip(0.0, 1.0)
+
+    # cfが小さいところは除外（割り算が不安定）
+    mask = (cf >= min_cf) & pv.notna() & cf.notna()
+    if mask.sum() == 0:
+        return float("nan")
+
+    cap_candidate = pv[mask] / cf[mask]   # MW
+    cap_candidate = cap_candidate.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if cap_candidate.empty:
+        return float("nan")
+
+    return float(cap_candidate.quantile(q))
+
 
 def optimize_dispatch():
 
@@ -500,12 +549,22 @@ def optimize_dispatch():
     pv_cap_fallback = float(params_raw.get("pv_cap_mw_init", 4000.0))
     wind_cap_fallback = float(params_raw.get("wind_cap_mw_init", 1500.0))
 
+    sw_series = _history_shortwave_series(today=today, recent_days=7)
     pv_cap_today = pv_cap_fallback
-    if pv_series is not None and not pv_series.empty:
-        pv_cap_today = float(effective_pmax(
-            pv_series, long_conf=long_conf, short_conf=short_conf,
-            today=pd.Timestamp(today), stat="quantile"
-        )) or pv_cap_fallback
+    if pv_series is not None and (not pv_series.empty) and sw_series is not None and (not sw_series.empty):
+        # timestamp を揃えてから推定（ズレ対策）
+        pv_aligned, sw_aligned = pv_series.align(sw_series, join="inner")
+        pv_cap_est = estimate_pv_cap_from_radiation(
+            pv_actual_mw=pv_aligned,
+            shortwave_wm2=sw_aligned,
+            pv_pr=PV_PR,
+            g_stc=G_STC,
+            recent_days=7,
+            q=0.80,
+            min_cf=0.15,
+        )
+        if np.isfinite(pv_cap_est):
+            pv_cap_today = float(pv_cap_est)
 
     wind_cap_today = wind_cap_fallback
     if wind_series is not None and not wind_series.empty:
@@ -513,6 +572,9 @@ def optimize_dispatch():
             wind_series, long_conf=long_conf, short_conf=short_conf,
             today=pd.Timestamp(today), stat="quantile"
         )) or wind_cap_fallback
+
+    print("pv_cap_today: ", pv_cap_today)
+    print("wind_cap_today: ", wind_cap_today)
 
     # --- 外生データ（pv/wind avail, fuel costs）作成 ---
     pv_wind, fuel_df = prepare_opt(
