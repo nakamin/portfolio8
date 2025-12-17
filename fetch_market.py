@@ -2,25 +2,26 @@ import re, os, io, time
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import requests
+from pathlib import Path
 
 # ===== 設定 =====
-# EIA_API_KEY = os.getenv("EIA_API_KEY", "PUT_YOUR_API_KEY")
-RAW_DIR = "data/raw"
-PROC_DIR = "data/cache"
-os.makedirs(RAW_DIR, exist_ok=True)
-os.makedirs(PROC_DIR, exist_ok=True)
+RAW_DIR = Path("data/raw")
+PROC_DIR = Path("data/cache")
 
 # キャッシュパス
-FX_CACHE      = os.path.join(RAW_DIR, "fx_usdjpy.csv")
-BRENT_CACHE   = os.path.join(RAW_DIR, "brent_daily.csv")
-GAS_CACHE     = os.path.join(RAW_DIR, "gas_henryhub_daily.csv")
-COAL_M_CACHE  = os.path.join(RAW_DIR, "coal_worldbank_monthly.csv")
-ALL_CACHE  = os.path.join(RAW_DIR, "all_comodity.csv")
+FX_CACHE      =  RAW_DIR / "fx_usdjpy.csv"
+BRENT_CACHE   = RAW_DIR / "brent_daily.csv"
+GAS_CACHE     = RAW_DIR / "gas_henryhub_daily.csv"
+COAL_M_CACHE  = RAW_DIR / "coal_worldbank_monthly.csv"
+ALL_CACHE  = RAW_DIR / "all_comodity.csv"
+
+COM_PATH_DAY = PROC_DIR / "fx_commodity_day.parquet"
+COM_PATH_AF1W = PROC_DIR / "fx_commodity_30min_af1w.parquet"
 
 # ---- 共通ユーティリティ ----
 def _req(url, params=None, timeout=30, max_retry=3):
     """
-    - URLからjson形式でparamsで指定したデータを取得する
+    - URLからparamsで指定したデータを取得する
     """
     
     last = None
@@ -399,9 +400,8 @@ def build_feature_table(start, end):
     latest_df["timestamp"] = pd.to_datetime(latest_df["timestamp"], errors="coerce")
     print("latent_df: \n", latest_df)
     
-    out_path = os.path.join(PROC_DIR, "fx_commodity_day.parquet")
-    latest_df.to_parquet(out_path)
-    print(f"[OK] market unified: {out_path}")
+    latest_df.to_parquet(COM_PATH_DAY)
+    print(f"[OK] market unified: {COM_PATH_DAY}")
     
 
     extended_market = expand_daily_to_30min(latest_df, ["USDJPY", "brent", "henry_hub", "coal_aus"])
@@ -421,9 +421,8 @@ def build_feature_table(start, end):
     extended_market = pd.concat([extended_market, df_future], ignore_index=True)
     print("market_extended: \n", extended_market)
     
-    out_path = os.path.join(PROC_DIR, "fx_commodity_30min_af1w.parquet")
-    extended_market.to_parquet(out_path)
-    print(f"[OK] extended_market unified: {out_path}")
+    extended_market.to_parquet(COM_PATH_AF1W)
+    print(f"[OK] extended_market unified: {COM_PATH_AF1W}")
 
 def fetch_market():
     

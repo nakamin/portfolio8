@@ -1,9 +1,11 @@
 import os, requests
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
-CACHE_DIR = "data/cache"
+CACHE_DIR = Path("data/cache")
+ACTUAL_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 
 # Open-Meteoから取得する変数
 OM_HOURLY_VARS = ",".join([
@@ -103,8 +105,6 @@ def build_openmeteo_daily(lat: float, lon: float, tz: str = "Asia/Tokyo",
             if c in df.columns:
                 df[c] = df[c].fillna(method="ffill", limit=2)
 
-    out_path = os.path.join(CACHE_DIR, "weather_bf1w_af1w.parquet")
-
     df = pd.concat([actual_30, fcst_30], ignore_index=True).sort_values("timestamp")
     df = df.sort_values(["timestamp","is_forecast"])
     df = df.drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
@@ -113,8 +113,8 @@ def build_openmeteo_daily(lat: float, lon: float, tz: str = "Asia/Tokyo",
     df = df.iloc[:-1, :]
     print("final_df: \n", df)
     print(df["timestamp"].diff().value_counts())
-    df.to_parquet(out_path)
-    print(f"[OK] weather unified: {out_path}")
+    df.to_parquet(ACTUAL_PATH)
+    print(f"[OK] weather unified: {ACTUAL_PATH}")
 
 def fetch_weather():
 
