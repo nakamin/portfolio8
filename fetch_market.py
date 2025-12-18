@@ -103,7 +103,7 @@ def fetch_fx_usdjpy(start, end):
         import yfinance as yf
         tkr = yf.Ticker("JPY=X")
         hist = tkr.history(start=start, end=end, interval="1d", actions=False, auto_adjust=False)
-        if hist is None or hist.empty:
+        if hist is not None and not hist.empty:
             out = (hist.reset_index()
                     .rename(columns={"Date":"date","Close":"USDJPY"})
                     [["date","USDJPY"]].dropna().sort_values("date"))
@@ -272,7 +272,6 @@ def fetch_coal_worldbank_monthly(start, end):
     """
     - 以下の優先度で石炭価格を取得する
         - Pink Sheet: Monthly Prices（APIキー不要）から為替価格を取得する
-        - yfinanceから取得する
         - キャッシュを使用する
     """
     try: 
@@ -333,6 +332,8 @@ def fetch_coal_worldbank_monthly(start, end):
 
     except Exception as e_wb:
         print(f"World Bank failed: {e_wb}")
+        
+    return _load_cache(COAL_M_CACHE, "month", start, end, "cache")
 
 
 def coal_monthly_to_daily_ffill(coal_m_df, start, end):
@@ -348,6 +349,9 @@ def coal_monthly_to_daily_ffill(coal_m_df, start, end):
     return coal_d
 
 def expand_daily_to_30min(df_daily, value_cols):
+    """
+    - 30分間隔のデータに変換する
+    """
     expanded = []
     for _, row in df_daily.iterrows():
         for i in range(48):
