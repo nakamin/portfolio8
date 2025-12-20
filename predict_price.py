@@ -7,7 +7,7 @@ import lightgbm as lgb
 from typing import Optional, Any
 from huggingface_hub import hf_hub_download
 
-from utils.make_date_features import make_date, make_daypart, make_season
+from utils.make_date_features import make_date, make_temperature_abs, make_daypart, make_season
 
 CACHE_DIR = Path("data/cache")
 HF_REPO_ID = "nakamichan/power-forecast-models"
@@ -27,20 +27,31 @@ LGB90_PATH = "lgb_price_p90.txt"
 # このモデルの結果
 PRICE_OUT_PATH = CACHE_DIR / "price_forecast.parquet"
 
-GAM_FEATURES = ["day_of_year", "season", "is_holiday",
-                "USDJPY", "brent", "henry_hub", "coal_aus",
-                "temp_7d_ma", "demand_7d_ma", "cooling_degree", "heating_degree"]
+GAM_FEATURES = [
+    # 需要・気象
+    "demand", "demand_7d_ma",
+    "temperature", "temp_7d_ma",
+    "shortwave_radiation",
+    "wind_speed",
+    # 時間・カレンダー
+    "hour", "day_of_year",
+    "is_holiday"
+    ]
 
 LGB_FEATURES = [
-    "demand",
-    "temperature", "humidity", "wind_speed", "shortwave_radiation","sunshine_duration",
-    "price_lag_24h", "price_lag_48h", "price_lag_72h", "price_lag_1w",
-    "hour", "daypart",
-    "y_gam",
-    "day_of_year", "season", "is_holiday",
+    "demand", "demand_7d_ma",
+    "temperature", "temp_7d_ma", "temperature_abs",
+    "wind_speed", "sunshine_duration", "shortwave_radiation",
+    "hour", "day_of_year", "is_holiday",
+    "season","daypart",
     "USDJPY", "brent", "henry_hub", "coal_aus",
-    "temp_7d_ma", "demand_7d_ma",
-]
+    "USDJPY_ma30", "USDJPY_chg30",
+    "brent_ma30", "brent_chg30",
+    "henry_hub_ma30",
+    "coal_aus_ma90", "coal_aus_chg90",
+    "price_lag_24h", "price_lag_48h", "price_lag_72h", "price_lag_1w",
+    "y_gam"
+    ]
 
 def load_price_model() -> Any:
     """
@@ -112,21 +123,36 @@ def build_price_features(
         categories=daypart_order,
         ordered=False
     )
+    merged_df["is_holiday"] = pd.Categorical(
+        merged_df["is_holiday"],
+        ordered=False
+    )
     
     merged_df["day_of_year"] = merged_df["timestamp"].dt.dayofyear
     # 過去7日移動平均の需要
-    merged_df["demand_7d_ma"] = merged_df["demand"].rolling(window=48*7, min_periods=1).mean()
+    merged_df["demand_7d_ma"] = merged_df["demand"].rolling(48*7, min_periods=1).mean()
     # 過去7日移動平均の気温
-    merged_df["temp_7d_ma"] = merged_df["temperature"].rolling(window=48*7, min_periods=1).mean()
-    # 冷房・暖房負荷の指標
-    merged_df["cooling_degree"] = (merged_df["temperature"] - 22).clip(lower=0)
-    merged_df["heating_degree"] = (18 - merged_df["temperature"]).clip(lower=0)
+    merged_df["temp_7d_ma"] = merged_df["temperature"].rolling(48*7, min_periods=1).mean()
+    merged_df = make_temperature_abs(merged_df)
+    
     # 価格ラグ
     merged_df["price_lag_24h"] = merged_df["tokyo_price_jpy_per_kwh"].shift(48)
     merged_df["price_lag_48h"] = merged_df["tokyo_price_jpy_per_kwh"].shift(96)
     merged_df["price_lag_72h"] = merged_df["tokyo_price_jpy_per_kwh"].shift(144)
     merged_df["price_lag_1w"] = merged_df["tokyo_price_jpy_per_kwh"].shift(336)
-    
+
+    # 為替・石油・ガス（日次レベル）
+    for col in ["USDJPY", "brent", "henry_hub"]:
+        # 30日移動平均
+        merged_df[f"{col}_ma30"] = merged_df[col].rolling(48*30, min_periods=1).mean()
+        # 30日前との差分
+        merged_df[f"{col}_chg30"] = merged_df[col] - merged_df[col].shift(48*30)
+
+    # 石炭（月次レベル）
+    # 90日移動平均
+    merged_df["coal_aus_ma90"] = merged_df["coal_aus"].rolling(48*90, min_periods=1).mean()
+    # 90日前との差分
+    merged_df["coal_aus_chg90"] = merged_df["coal_aus"] - merged_df["coal_aus"].shift(48*90)
     
     pred_time_df = merged_df[merged_df["timestamp"] >= tomorrow]
     pred_time = pred_time_df["timestamp"]
@@ -144,7 +170,7 @@ def predict_gam(
     """
     
     X_gam_test = test_df.copy()
-    X_gam_test["season"] = X_gam_test["season"].cat.codes.astype("int8")
+    X_gam_test["is_holiday"] = X_gam_test["is_holiday"].cat.codes.astype("int8")
     X_gam_test = X_gam_test[GAM_FEATURES].to_numpy()
     print("X_gam_test: \n", X_gam_test)
     test_df["y_gam"] = gam_model.predict(X_gam_test)
@@ -175,6 +201,7 @@ def predict_price():
     print("demand\n", demand)
     weather = pd.read_parquet(WEATHER_PATH)
     print("weather\n", weather)
+    print(weather.columns)
     market = pd.read_parquet(MARKET_PATH)
     print("market\n", market)
     price = pd.read_parquet(PRICE_PATH)
@@ -191,7 +218,6 @@ def predict_price():
     gam, lgb_p10, lgb_p50, lgb_p90 = load_price_model()
     
     test_df = predict_gam(gam, test_df)
-    
     r10_test, r50_test, r90_test = predict_lgb(lgb_p10, lgb_p50, lgb_p90, test_df)
 
     # 予測結果をparquetで保存

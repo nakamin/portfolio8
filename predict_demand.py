@@ -9,7 +9,7 @@ import joblib
 from huggingface_hub import hf_hub_download
 
 from model.demand_model import GRUModel
-from utils.make_date_features import make_date
+from utils.make_date_features import make_date, make_sincos, make_temperature_abs
 
 CACHE_DIR = Path("data/cache")
 
@@ -19,19 +19,20 @@ DEMAND_OUT_PATH = CACHE_DIR / "demand_forecast.parquet"
 
 HF_REPO_ID = "nakamichan/power-forecast-models"
 DEMAND_MODEL = "model_demand.pth"
-SCALER_X_PATH = "scaler_X.pkl"
 SCALER_Y_PATH = "scaler_y.pkl"
+
+def _today_jst():
+    JST = timezone(timedelta(hours=9))
+    return datetime.now(JST).date()
 
 # =========================
 # モデルのロード部分
 # =========================
 
-def load_demand_model() -> Any:
+def load_demand_model(input_size) -> Any:
     """
     需要予測モデルを読み込んで返す
     """
-    # if model_path is None:
-    #     model_path = os.path.join(MODEL_DIR, "model_demand.pth")
     
     # モデルファイルを Hub からダウンロード
     model_path = hf_hub_download(
@@ -39,7 +40,7 @@ def load_demand_model() -> Any:
         filename=DEMAND_MODEL,
     )
     
-    model = GRUModel()      
+    model = GRUModel(input_size=input_size)      
     model.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
     return model
 
@@ -48,69 +49,49 @@ def load_demand_model() -> Any:
 # 特徴量作成部分
 # =========================
 
-def _today_jst():
-    JST = timezone(timedelta(hours=9))
-    return datetime.now(JST).date()
-
-def build_demand_features(weather: pd.DataFrame, sequence_length: int) -> pd.DataFrame:
+def build_demand_features(
+    weather: pd.DataFrame,
+    sequence_length: int,
+    weather_col =  ["timestamp", "temperature", "humidity", "is_forecast"],
+    ) -> pd.DataFrame:
     """
     気象データから需要予測用の特徴量を作る
 
     入力:
         weather: weather_1w.parquet を読んだ DataFrame
-        特徴量：use_col = ["year", "month", "hour", "datetime", "is_holiday", "temperature"]
+        特徴量：use_colにリストで指定
 
     出力:
         features: モデルに入力する特徴量 DataFrame
             - index または 'timestamp' で元の時間軸と対応すること
     """
     df = weather.copy()
-    weather_col = ["timestamp", "temperature", "is_forecast"]
     weather_df = df[weather_col]
     
     today = _today_jst()
     cut = pd.Timestamp(f"{today} 00:00:00")
+    
     start_time = cut - pd.Timedelta(minutes=30 * sequence_length) # 前日の24ステップを含める
-    weather_df = weather_df[weather_df["timestamp"] >= start_time]
+    X_test = weather_df[weather_df["timestamp"] >= start_time]
     
-    feature_pred_df = make_date(weather_df)
-    feature_pred_df.reset_index(drop=True, inplace=True)
-    feature_col = ["month", "hour", "is_holiday", "temperature"]
-    scaled_cols = ["temperature"]
-    
-    X_test = feature_pred_df[feature_col]
-    
-    # スケーリング対象以外の列
-    non_scaled_cols = [col for col in feature_col if col not in scaled_cols]
-
-    # 非スケーリング列をそのまま抽出
-    X_test_rest = X_test[non_scaled_cols].copy()
-    
-    scaler_X_path= hf_hub_download(
-        repo_id=HF_REPO_ID,
-        filename=SCALER_X_PATH,
-    )
-    scaler_y_path= hf_hub_download(
-        repo_id=HF_REPO_ID,
-        filename=SCALER_Y_PATH,
-    )
-    
-    scaler_X = joblib.load(scaler_X_path)
-    scaler_y = joblib.load(scaler_y_path)
-
-    X_test_scaled = scaler_X.transform(X_test[scaled_cols])
-    X_test_scaled_df = pd.DataFrame(X_test_scaled, columns=scaled_cols, index=X_test.index)
-    X_test_final = pd.concat([X_test_rest, X_test_scaled_df], axis=1)
-    print("X_test_final shape:", X_test_final.shape)
-    print("X_test_final: \n", X_test_final)
-    
-    pred_time_df = feature_pred_df[feature_pred_df["timestamp"] >= cut]
+    # 予測期間を抜き出す
+    pred_time_df = X_test[X_test["timestamp"] >= cut]
     pred_time = pred_time_df["timestamp"]
     print("prediction time: \n", pred_time)
-    # テンソルに変換
-    data_test = torch.tensor(X_test_final.values, dtype=torch.float32)
     
-    return data_test, scaler_y, pred_time
+    X_test = make_date(X_test)
+    X_test = make_sincos(X_test, add_month=True, add_hour=True)
+    X_test = make_temperature_abs(X_test)
+    
+    X_test.set_index("timestamp", inplace=True) 
+    X_test.drop(columns="is_forecast", inplace=True)
+    print("X_test shape:", X_test.shape)
+    print("X_test: \n", X_test)
+    
+    # テンソルに変換
+    features_tensor = torch.tensor(X_test.values, dtype=torch.float32)
+    
+    return features_tensor, pred_time
     
 # モデルに適した形状に変換する
 def create_sequences(data, sequence_length):
@@ -133,22 +114,6 @@ def evaluate(model, dataloader, scaler_y, device):
 
     predictions = scaler_y.inverse_transform(torch.cat(all_predictions).cpu().numpy()) # すべてのバッチの予測値を1つのテンソルにしてからスケールを元に戻sす
     return predictions
-
-# Early Stopping クラス
-class EarlyStopping:
-    def __init__(self, patience=5):
-        self.patience = patience
-        self.best_loss = float('inf')
-        self.trigger_times = 0
-
-    def check(self, current_loss):
-        if current_loss < self.best_loss:
-            self.best_loss = current_loss
-            self.trigger_times = 0
-            return False  # Early Stoppingしない
-        else:
-            self.trigger_times += 1
-            return self.trigger_times >= self.patience  # 改善が見られなければTrue
         
 def predict_demand():
     
@@ -159,18 +124,23 @@ def predict_demand():
     weather["timestamp"] = pd.to_datetime(weather["timestamp"])
 
     # 過去の一定期間（24時間分）のデータを1つの入力シーケンとしてまとめる
-    sequence_length = 24
+    sequence_length = 48
+    
+    scaler_y_path= hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=SCALER_Y_PATH,
+    )
+    
+    scaler_y = joblib.load(scaler_y_path)
 
-    features_tensor, scaler_y, pred_time = build_demand_features(weather, sequence_length)
-    print("features_tensor\n", features_tensor)
+    features_tensor, pred_time = build_demand_features(weather, sequence_length)
     print("features_tensor.shape\n", features_tensor.shape)
 
     # シーケンスデータ作成
     test_sequences = create_sequences(features_tensor, sequence_length)
+    print("test_sequences.shape", test_sequences.shape)  # (n_samples, sequence_length, num_features)
 
-    print(test_sequences.shape)  # (n_samples, sequence_length, num_features)
-
-    model = load_demand_model()
+    model = load_demand_model(input_size=features_tensor.shape[1])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device=device)
     test_loader = DataLoader(TensorDataset(test_sequences), batch_size=128, shuffle=False)
@@ -195,7 +165,7 @@ def predict_demand():
         on="timestamp",
         how="outer",
     )
-    out["demand"] = out["predicted_demand"].fillna(demand["realized_demand"])
+    out["demand"] = out["predicted_demand"].fillna(out["realized_demand"])
     print("final_out:\n", out)
     
     out.to_parquet(DEMAND_OUT_PATH, index=False)

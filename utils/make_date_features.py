@@ -1,9 +1,11 @@
 import jpholiday
+import numpy as np
 
 def make_date(df):
     """
     - timestamp列からmonth, hour,is_holiday列を追加する
     """
+    df = df.copy()
 
     df["month"] = df["timestamp"].dt.month
     df["hour"] = df["timestamp"].dt.hour
@@ -25,6 +27,33 @@ def make_date(df):
     df.drop(columns=["is_year_end", "is_obon"], inplace=True)
     
     return df
+
+def make_sincos(df, add_month, add_hour):
+    """
+    - 指定したcolにsin,cos変換を施す
+    """
+    df = df.copy()
+    
+    if add_month:
+        df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+        df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
+
+    if add_hour:
+        df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
+        df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+
+    return df
+
+def make_temperature_abs(df, threshold=18.1):
+    """
+    - temperature列から気温の絶対値差分の特徴量を作成する
+    """
+    df = df.copy()
+    
+    df["temperature_abs"] = (df['temperature'] - threshold).abs()
+    
+    return df
+
 
 def make_daypart(hour: int) -> str:
     """時間を6つに分ける"""
