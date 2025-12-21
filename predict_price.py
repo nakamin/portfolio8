@@ -1,5 +1,6 @@
 from pathlib import Path
 import joblib
+import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
@@ -39,19 +40,31 @@ GAM_FEATURES = [
     ]
 
 LGB_FEATURES = [
-    "demand", "demand_7d_ma",
-    "temperature", "temp_7d_ma", "temperature_abs",
-    "wind_speed", "sunshine_duration", "shortwave_radiation",
-    "hour", "day_of_year", "is_holiday",
-    "season","daypart",
-    "USDJPY", "brent", "henry_hub", "coal_aus",
-    "USDJPY_ma30", "USDJPY_chg30",
-    "brent_ma30", "brent_chg30",
-    "henry_hub_ma30",
-    "coal_aus_ma90", "coal_aus_chg90",
-    "price_lag_24h", "price_lag_48h", "price_lag_72h", "price_lag_1w",
-    "y_gam"
-    ]
+    # 需要・気象関連
+    'demand', 'temperature', 'wind_speed',
+    'sunshine_duration', 'shortwave_radiation',
+    'temperature_abs', 'demand_7d_ma', 'temp_7d_ma',
+
+    # カレンダー・時間関連
+    'is_holiday', 'hour',
+    'day_of_year', 'season', 'daypart',
+
+    # 為替・燃料価格
+    'USDJPY', 'brent', 'henry_hub', 'coal_aus',
+
+    # 為替・燃料価格（移動平均・変化率）
+    'USDJPY_ma30', 'USDJPY_chg30',
+    'brent_ma30', 'brent_chg30',
+    'henry_hub_ma30',
+    'coal_aus_ma90', 'coal_aus_chg90',
+
+    # 価格ラグ
+    'price_lag_24h', 'price_lag_48h',
+    'price_lag_72h', 'price_lag_1w',
+    
+    # GAM特徴量
+    'y_gam'
+]
 
 def load_price_model() -> Any:
     """
@@ -86,11 +99,10 @@ def build_price_features(
     demand: pd.DataFrame,
     weather: pd.DataFrame,
     market: pd.DataFrame,
-    price: pd.DataFrame,
-    tomorrow
+    price: pd.DataFrame
 ) -> pd.DataFrame:
     """
-
+    - 特徴量を作成する
     """
     # timestamp を必ず datetime にしておく
     demand["timestamp"] = pd.to_datetime(demand["timestamp"])
@@ -99,8 +111,8 @@ def build_price_features(
     price["timestamp"] = pd.to_datetime(price["timestamp"])
 
     # 結合
-    merged_df = demand.merge(weather, on="timestamp", how="left") \
-                    .merge(market, on="timestamp", how="left") \
+    merged_df = market.merge(weather, on="timestamp", how="left") \
+                    .merge(demand, on="timestamp", how="left") \
                     .merge(price, on="timestamp", how="left")
     print("merged_df:\n", merged_df)
     
@@ -108,7 +120,6 @@ def build_price_features(
     
     merged_df['daypart'] = merged_df['hour'].apply(make_daypart)
     merged_df['season']  = merged_df['month'].apply(make_season)
-    
     
     daypart_order = ["dawn","morning","noon","afternoon","evening","night"]
     season_order  = ["spring","summer","autumn","winter"]
@@ -154,11 +165,87 @@ def build_price_features(
     # 90日前との差分
     merged_df["coal_aus_chg90"] = merged_df["coal_aus"] - merged_df["coal_aus"].shift(48*90)
     
-    pred_time_df = merged_df[merged_df["timestamp"] >= tomorrow]
-    pred_time = pred_time_df["timestamp"]
-    print("prediction time: \n", pred_time)
-    
-    return merged_df, pred_time
+    return merged_df
+
+def _get_lag(price_hist: pd.Series, ts: pd.Timestamp, delta: pd.Timedelta) -> float:
+    key = ts - delta
+    if key in price_hist.index:
+        v = price_hist.loc[key]
+        return float(v) if pd.notna(v) else np.nan
+    return np.nan
+
+
+def recursive_predict_price(
+    features_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    gam_model,
+    lgb_p10, lgb_p50, lgb_p90,
+    gam_features: list,
+    lgb_features: list,
+    lag_use_p50: bool = True,
+):
+    """
+    features_df: build_price_featuresの出力（過去〜未来まで含む）
+    test_df: 明日以降の行だけ（features_dfからsliceしたもの）
+    """
+
+    # 念のため timestamp 昇順に
+    features_df = features_df.sort_values("timestamp").reset_index(drop=True)
+    test_df = test_df.sort_values("timestamp").reset_index(drop=True)
+
+    # 価格履歴（過去は実績、未来は予測で埋めていく）
+    # index=timestamp にして「ts-24h」を引けるようにする
+    price_hist = features_df.set_index("timestamp")["tokyo_price_jpy_per_kwh"].copy()
+
+    # 出力を貯める
+    out = []
+
+    for i in range(len(test_df)):
+        row = test_df.iloc[i].copy()
+        ts = pd.Timestamp(row["timestamp"])
+
+        # ---- (1) price lag を時刻差で更新（shift依存を排除） ----
+        row["price_lag_24h"] = _get_lag(price_hist, ts, pd.Timedelta(hours=24))
+        row["price_lag_48h"] = _get_lag(price_hist, ts, pd.Timedelta(hours=48))
+        row["price_lag_72h"] = _get_lag(price_hist, ts, pd.Timedelta(hours=72))
+        row["price_lag_1w"]  = _get_lag(price_hist, ts, pd.Timedelta(days=7))
+
+        # ---- (2) GAMで y_gam を作る（この行の特徴量から） ----
+        X_gam_row = pd.DataFrame([row[gam_features].to_dict()])
+        # 学習時に合わせてカテゴリ→codes
+        if "is_holiday" in X_gam_row.columns:
+            # category の可能性があるので両対応
+            if str(X_gam_row["is_holiday"].dtype) == "category":
+                X_gam_row["is_holiday"] = X_gam_row["is_holiday"].cat.codes.astype("int8")
+            else:
+                X_gam_row["is_holiday"] = X_gam_row["is_holiday"].astype("int8")
+
+        y_gam = float(gam_model.predict(X_gam_row.to_numpy())[0])
+        row["y_gam"] = y_gam
+
+        # ---- (3) LightGBMで分位点推論 ----
+        X_lgb_row = pd.DataFrame([row[lgb_features].to_dict()])
+        
+        p10 = float(lgb_p10.predict(X_lgb_row)[0])
+        p50 = float(lgb_p50.predict(X_lgb_row)[0])
+        p90 = float(lgb_p90.predict(X_lgb_row)[0])
+
+        # ---- (4) 分位点の交差を補正（最小で安全） ----
+        p10, p50, p90 = np.sort([p10, p50, p90])
+
+        # ---- (5) 次ステップ用に「中心」を価格履歴へ戻す ----
+        if lag_use_p50:
+            price_hist.loc[ts] = p50
+
+        out.append({
+            "timestamp": ts,
+            "predicted_price(10%)": p10,
+            "predicted_price(50%)": p50,
+            "predicted_price(90%)": p90,
+            "y_gam": y_gam,
+        })
+
+    return pd.DataFrame(out)
 
 
 def predict_gam(
@@ -186,6 +273,7 @@ def predict_lgb(
     
     print(test_df.columns)
     X_lgb_test = test_df[LGB_FEATURES]
+    print("NaN rate per col:\n", X_lgb_test.isna().mean().sort_values(ascending=False).head(20))
 
     r10_test = lgb_p10.predict(X_lgb_test)
     r50_test = lgb_p50.predict(X_lgb_test)
@@ -198,26 +286,52 @@ def predict_price():
     
     # 特徴量の読み込み
     demand = pd.read_parquet(DEMAND_PATH)
-    print("demand\n", demand)
+    print("demand: \n", demand)
     weather = pd.read_parquet(WEATHER_PATH)
-    print("weather\n", weather)
+    print("weather: \n", weather)
     print(weather.columns)
     market = pd.read_parquet(MARKET_PATH)
-    print("market\n", market)
+    print("market: \n", market)
     price = pd.read_parquet(PRICE_PATH)
-    print("price\n", price)
+    print("price: \n", price)
     
     JST = timezone(timedelta(hours=9))
     today = pd.Timestamp(datetime.now(JST).date())
-    tomorrow = today + timedelta(days=1)
+    # tomorrow = today + timedelta(days=1)
 
-    features_df, pred_time = build_price_features(demand, weather, market, price, tomorrow)
-
-    test_df = features_df[features_df["timestamp"] >= tomorrow].reset_index(drop=True)
+    features_df = build_price_features(demand, weather, market, price)
+    print("features_df: \n", features_df)
+    test_df = features_df[
+    (features_df["timestamp"] >= pd.to_datetime(today + timedelta(days=1))) & 
+    (features_df["timestamp"] < pd.to_datetime(today + timedelta(days=2)))
+    ].reset_index(drop=True) # 明日のみ
+    print("test_df: \n", test_df)
+    pred_time = test_df["timestamp"].copy()
     
     gam, lgb_p10, lgb_p50, lgb_p90 = load_price_model()
     
+    # pred_df = recursive_predict_price(
+    #     features_df=features_df,
+    #     test_df=test_df,
+    #     gam_model=gam,
+    #     lgb_p10=lgb_p10,
+    #     lgb_p50=lgb_p50,
+    #     lgb_p90=lgb_p90,
+    #     gam_features=GAM_FEATURES,
+    #     lgb_features=LGB_FEATURES,
+    #     lag_use_p50=True,
+    # )
+
+    missing = [c for c in GAM_FEATURES if c not in test_df.columns]
+    print("missing GAM cols:", missing)
+    
+    # GAM
     test_df = predict_gam(gam, test_df)
+    
+    missing = [c for c in LGB_FEATURES if c not in test_df.columns]
+    print("missing LightGBM cols:", missing)
+    
+    # LightGBM
     r10_test, r50_test, r90_test = predict_lgb(lgb_p10, lgb_p50, lgb_p90, test_df)
 
     # 予測結果をparquetで保存
@@ -227,6 +341,18 @@ def predict_price():
         "predicted_price(50%)": r50_test.flatten(),
         "predicted_price(90%)": r90_test.flatten(),
     }).reset_index(drop=True)
+
+    p10 = pred_df["predicted_price(10%)"].values
+    p50 = pred_df["predicted_price(50%)"].values
+    p90 = pred_df["predicted_price(90%)"].values
+
+    p50 = p50.clip(p10, p90)
+    p90 = np.maximum(p90, p50)
+    p10 = np.minimum(p10, p50)
+
+    pred_df["predicted_price(10%)"] = p10
+    pred_df["predicted_price(50%)"] = p50
+    pred_df["predicted_price(90%)"] = p90
     
     print("pred_df: \n", pred_df)
     
@@ -236,7 +362,7 @@ def predict_price():
         on="timestamp",
         how="outer",
     )
-    out["price"] = out["predicted_price(50%)"].fillna(price["tokyo_price_jpy_per_kwh"])
+    out["price"] = out["predicted_price(50%)"].fillna(out["tokyo_price_jpy_per_kwh"])
     print("final_out:\n", out)
     
     out.to_parquet(PRICE_OUT_PATH, index=False)

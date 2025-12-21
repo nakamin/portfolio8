@@ -21,6 +21,11 @@ HF_REPO_ID = "nakamichan/power-forecast-models"
 DEMAND_MODEL = "model_demand.pth"
 SCALER_Y_PATH = "scaler_y.pkl"
 
+# 学習時の並び順と必ず一致させる
+FEATURE_COL = ["month", "hour", "is_holiday", "humidity", 
+            "temperature", "temperature_abs",
+            "month_sin", "month_cos", "hour_sin", "hour_cos"]
+
 def _today_jst():
     JST = timezone(timedelta(hours=9))
     return datetime.now(JST).date()
@@ -85,6 +90,7 @@ def build_demand_features(
     
     X_test.set_index("timestamp", inplace=True) 
     X_test.drop(columns="is_forecast", inplace=True)
+    X_test = X_test[FEATURE_COL] # 学習時の並び順を確認済み
     print("X_test shape:", X_test.shape)
     print("X_test: \n", X_test)
     
@@ -123,8 +129,8 @@ def predict_demand():
     # timestamp を必ず datetime にしておく
     weather["timestamp"] = pd.to_datetime(weather["timestamp"])
 
-    # 過去の一定期間（24時間分）のデータを1つの入力シーケンとしてまとめる
-    sequence_length = 48
+    # 過去の一定期間（12時間分）のデータを1つの入力シーケンとしてまとめる
+    sequence_length = 24
     
     scaler_y_path= hf_hub_download(
         repo_id=HF_REPO_ID,

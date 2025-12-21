@@ -193,7 +193,7 @@ def main():
             st.stop()
         print("price_fc: \n", price_fc)
 
-        fig_p = plot_price(price_fc=price_fc, now_floor=now_floor)
+        fig_p = plot_price(price_fc=price_fc, today=today, now_floor=now_floor)
         st.plotly_chart(fig_p)
         
         st.markdown(
@@ -232,74 +232,151 @@ def main():
 
 
     with tab_model:
+        meta = load_metadata()
         sources = meta.get("sources", {})
-        
-        st.markdown("### 需要予測モデル")
+
+        st.markdown("## モデル一覧（需要 → 価格 → 最適化）")
+        st.caption(
+            "このダッシュボードは「需要予測 → 価格予測 → 電源構成の最適化」の順に計算し、"
+            "`data/cache/*.parquet` を更新しています。ここでは各モデルの役割・入力・出力をまとめます。"
+        )
+
+        st.markdown("---")
+        st.markdown("### 需要予測モデル（Demand Forecast）")
+
         st.markdown(
             f"""
-    - 特徴量: 過去需要、気象（気温・日射・風速）、休日フラグ など
-    - モデル: {sources.get("demand_model", "不明")}
-    - 目的: 30分先〜7日先までの需要分布（P10 / P50 / P90）を推定
+    **目的**  
+    - 30分刻みで「明日〜7日先」までの需要（MW）を予測  
+
+    **入力データ**  
+    - 気象（実績+予報）：気温 / 湿度 など（`weather_bf1w_af1w.parquet`）  
+    - カレンダー特徴：月・時刻（sin/cos 変換）、休日フラグ（祝日 + 年末年始 + お盆）  
+    - 体感温度に近い補助特徴：`temperature_abs = |temperature - 18.1|`  
+
+    **モデル**  
+    - {sources.get("demand_model", "GRU（時系列モデル）")}  
+    - 学習済み重み（`.pth`）と目的変数スケーラ（`scaler_y.pkl`）は Hugging Face Hub に置き、
+    GitHub には毎日更新される cache のみを置く設計です。
+
+    **出力**  
+    - `demand_forecast.parquet`  
+    - `timestamp`（30分刻み）  
+    - `predicted_demand`（需要予測 MW）  
+    - `realized_demand`（取得できる範囲のみ実績 MW）  
+    - `demand`（表示用：予測があれば予測、なければ実績で埋めた列）
             """
         )
 
-        st.markdown("### 価格予測モデル")
+        st.markdown("---")
+        st.markdown("### 価格予測モデル（Price Forecast）")
+
         st.markdown(
             f"""
-    - 特徴量: 需要予測、燃料価格（Brent / Henry Hub / 石炭）、為替、天候など
-    - モデル: {sources.get("price_model", "不明")}
-    - 目的: 東京エリア JEPX スポット価格のリスクレンジを推定
+    **目的**  
+    - 東京エリアの JEPX スポット価格（円/kWh）を、将来の不確実性（リスクレンジ）込みで推定
+    - ダッシュボード上では「P10 / P50 / P90」のような分位点（下振れ・中央値・上振れ）で表示する
+
+    **入力データ**  
+    - 需要：需要予測（`predicted_demand`）および必要なら実績需要  
+    - 価格ラグ：過去のJEPX価格（24時間前）  
+    - 市況：燃料（Brent / Henry Hub / 石炭など）・為替（USD/JPY など）、ラグ
+    
+    
+      
+    - 天候：気温、日照時間、全天日射、風速
+
+    **モデル**  
+    - {sources.get("price_model", "GAM + LightGBM（分位点回帰）")}  
+    - **GAM**：季節性・時刻（sin/cos）・休日など「なめらかな周期構造」を捉える（基礎形状）  
+    - **LightGBM**：燃料・為替・ラグ等の非線形関係を捉え、GAMだけでは取り切れない変動を補正  
+    - 予測時は、学習時と同じ前処理（カテゴリの扱い、欠損処理、特徴量列の順序）を厳密に揃えます。
+
+    **出力**  
+    - `price_forecast.parquet`（想定）  
+    - `timestamp`  
+    - `predicted_price_p10`, `predicted_price_p50`, `predicted_price_p90`  
+    - `tokyo_price_jpy_per_kwh`（取得できる範囲のみ実績）  
+    - `price`（表示用：予測があれば予測、なければ実績で埋めた列）
             """
         )
 
-        st.markdown("### 最適化モデル")
+        st.markdown("---")
+        st.markdown("### 最適化モデル（Dispatch Optimization）")
+
         st.markdown(
-            """
-    - 目的関数: 供給コスト最小化
-    - 制約条件:
-        - 需要=供給バランス
-        - 各電源の最大・最小出力
-        - ランプ制約、揚水・蓄電池の入出力制約 など
+            f"""
+    **目的**  
+    - 需要予測を満たしつつ、1日分（30分×48）の供給コストを最小化する電源構成を求める
+    - ダッシュボードでは、電源別の積み上げ（PV/風力/水力/火力/蓄電池/揚水/受電…）を可視化
+
+    **入力**  
+    - 需要：需要予測（`predicted_demand` または `demand`）  
+    - 再エネ上限：太陽光・風力の時刻別上限（予報や設備容量から算出）  
+    - 設備制約：火力・水力などの最大/最小、ランプ制約  
+    - 蓄電池・揚水：容量、充放電効率、入出力上限、SOC制約  
+    - コスト：燃料単価・起動費・不足（shedding）ペナルティなど
+
+    **モデル**  
+    - {sources.get("optimizer", "数理最適化（線形/混合整数など）")}  
+    - 「予測→最適化→結果保存」までを毎日自動で回し、最新の電源構成を更新します。
+
+    **出力**  
+    - `opt_dispatch.parquet`（想定）  
+    - `timestamp`, `pv`, `wind`, `hydro`, `coal`, `lng`, `oil`, `battery`, `pumped`, `import`, `curtail_*`, `shed`, `total_cost` など  
             """
         )
-        
+
+
     with tab_pipeline:
         meta = load_metadata()
         src = meta.get("sources", {})
         markets = src.get("markets", {})
 
+        st.markdown("## パイプライン概要（毎日自動更新）")
+        st.caption(
+            "このプロジェクトは「毎日データを取り直し → 予測 → 最適化 → cache保存」を繰り返しています。"
+        )
+
         st.markdown("### 全体フロー")
         st.markdown(
             """
-    1. 需要・価格・天気・燃料市況の取得（`fetch_*.py`）
-    2. 前処理・特徴量生成（`predict_demand.py`, `predict_price.py`）
-    3. 単位時間ごとのディスパッチ最適化（`optimize_dispatch.py`）
-    4. 結果を `data/cache/*.parquet` に保存（`run_daily_pipeline.py`）
+    1. **データ取得**：需要実績 / 天気（実績+予報）/ 市場価格（JEPX）/ 燃料・為替  
+    2. **前処理・特徴量生成**：モデル入力の整形（欠損処理、休日フラグ、ラグ、移動平均など）  
+    3. **予測**：需要 → 価格（分位点）  
+    4. **最適化**：1日分の電源構成を最適化  
+    5. **保存**：`data/cache/*.parquet` と `metadata.json` を更新し、ダッシュボードが参照
             """
         )
 
         st.markdown("---")
         st.markdown("### 1. データ取得フェーズ（`fetch_*.py`）")
 
-        st.markdown("**需要・価格**")
+        st.markdown("**需要（実績）・価格（実績）**")
         st.markdown(
             f"""
-    - 需要実績: 電力会社公表データ（例：東京電力「でんき予報」実績値 CSV）
-    - 市場価格: {src.get("jepx", "JEPX 日前スポット 東京エリア")}
+    - 需要実績: {src.get("demand", "TEPCO でんき予報 エリア需給実績データ）")}  
+    - 市場価格: {src.get("jepx", "JEPX 日前スポット（東京エリア）")}  
+    - JEPXはページ操作後にダウンロードが発生するため、Playwrightでブラウザ操作を自動化しています。
             """
         )
 
-        st.markdown("**天気（気温・日射・風速 など）**")
-        st.markdown(f"- {src.get('weather', 'Open-Meteo JMA API')}")
+        st.markdown("**天気（実績+予報）**")
+        st.markdown(
+            f"""
+    - {src.get('weather', 'Open-Meteo（JMAベース）など')}  
+    - 「一週間前〜一週間後」をまとめて取得し、需要・価格の特徴量に利用します。
+            """
+        )
 
-        st.markdown("**燃料市況**")
+        st.markdown("**燃料市況・為替**")
         st.markdown(
             "\n".join(
                 [
-                    f"- 為替: {markets.get('fx', 'Frankfurter / ECB')}",
-                    f"- 原油: {markets.get('oil', 'EIA / yfinance BZ=F')}",
-                    f"- LNG: {markets.get('lng', 'EIA / yfinance NG=F')}",
-                    f"- 石炭: {markets.get('coal', 'World Bank Pink Sheet')}",
+                    f"- 為替: {markets.get('fx', 'Frankfurter / ECB など')}",
+                    f"- 原油: {markets.get('oil', 'EIA / yfinance BZ=F など')}",
+                    f"- LNG: {markets.get('lng', 'EIA / yfinance NG=F など')}",
+                    f"- 石炭: {markets.get('coal', 'World Bank Pink Sheet など')}",
                 ]
             )
         )
@@ -307,30 +384,32 @@ def main():
         st.markdown("---")
         st.markdown("### 2. 前処理・特徴量生成（`predict_demand.py`, `predict_price.py`）")
 
-        st.markdown("**需要予測**")
+        st.markdown("**需要予測の特徴量**")
         st.markdown(
             f"""
-    - 利用データ: 過去需要、気象、曜日・休日フラグ など  
-    - モデル: {src.get("demand_model", "自作需要予測モデル")}
+    - 利用データ: 気象（実績+予報）、休日フラグ、月・時刻（sin/cos）、補助特徴（temperature_abs）など  
+    - モデル: {src.get("demand_model", "GRU")}  
+    - 出力: `demand_forecast.parquet`（予測 + 実績の統合）
             """
         )
 
-        st.markdown("**価格予測**")
+        st.markdown("**価格予測の特徴量**")
         st.markdown(
             f"""
-    - 利用データ: 需要予測、JEPX 過去スポット価格、為替、Brent、Henry Hub、石炭価格 など  
-    - モデル: {src.get("price_model", "自作価格予測モデル")}
-    - 出力: P10 / P50 / P90 の分位点価格
+    - 利用データ: 需要予測、JEPX過去価格（ラグ/移動平均）、燃料・為替、天候など  
+    - モデル: {src.get("price_model", "GAM + LightGBM（分位点）")}  
+    - 出力: P10 / P50 / P90（またはP10/P50/P90相当）の分位点価格
             """
         )
 
         st.markdown("---")
-        st.markdown("### 3. ディスパッチ最適化（`optimize_dispatch.py`）")
+        st.markdown("### 3. 最適化（`optimize_dispatch.py`）")
         st.markdown(
             f"""
-    - 目的: 予測需要を満たしつつ総コストを最小化  
-    - 入力: 需要予測、電源ごとの制約、燃料コスト など  
-    - モデル: {src.get("optimizer", "自作数理最適化モデル")}
+    - 需要（予測）を満たす電源構成をコスト最小化で求める 
+    - 入力: 需要予測、燃料コスト、再エネ上限、設備制約など  
+    - モデル: {src.get("optimizer", "数理最適化モデル")}  
+    - 出力: 電源別の出力とコスト（`opt_dispatch.parquet` など）
             """
         )
 
@@ -338,41 +417,35 @@ def main():
         st.markdown("### 4. キャッシュ・ダッシュボード連携（`run_daily_pipeline.py`）")
         st.markdown(
             """
-    - 上記 1〜3 を一括実行し、`data/cache/*.parquet` を生成  
-    - 併せて `metadata.json` に最終更新時刻・データソース・モデル情報を保存  
-    - このダッシュボードは `metadata.json` を読み込んで、画面上部の更新日時や
-    「データ・モデル情報」タブ、フッターのクレジットに反映している
+    - 上記 1〜3 を一括実行し、`data/cache/*.parquet` を生成します。 
+    - 併せて `metadata.json` に「最終更新時刻」「データソース」「モデル情報」を保存します。  
+    - ダッシュボードは `metadata.json` を読み込み、画面上部の更新日時や「データ・モデル情報」タブ、
+    フッターのクレジットに反映しています。
             """
         )
 
 
     with contact:
-        # ========================
-        # セクション4: お問い合わせ
-        # ========================
         st.subheader("お問い合わせフォーム")
+        st.markdown("モデルや可視化に関するご意見等がございましたら下記フォームよりお問い合わせください。")
 
-        st.markdown(
-            """
-        モデルや可視化に関するご意見等がございましたら下記フォームよりお問い合わせください。
-        """
-        )
-
-        def save_contact(name: str, email: str, message: str):
+        # ★ age/gender も保存するなら、保存関数の引数とCSV列を増やす
+        def save_contact(name: str, email: str, age: int, gender: str, message: str):
             contact_path = Path("data/contact_messages.csv")
             contact_path.parent.mkdir(parents=True, exist_ok=True)
             ts = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+
             row = pd.DataFrame(
-                [[ts, name, email, message]],
-                columns=["timestamp", "name", "email", "message"],
+                [[ts, name, email, age, gender, message]],
+                columns=["timestamp", "name", "email", "age", "gender", "message"],
             )
+
             if contact_path.exists():
                 row.to_csv(contact_path, mode="a", header=False, index=False)
             else:
                 row.to_csv(contact_path, index=False)
 
         with st.form("contact_form"):
-            
             col1, col2 = st.columns(2)
 
             with col1:
@@ -380,11 +453,9 @@ def main():
                 email = st.text_input("メールアドレス")
 
             with col2:
-                age = st.number_input("年齢（任意）", min_value=0, max_value=120)
+                age = st.number_input("年齢（任意）", min_value=0, max_value=120, value=0)
                 gender = st.selectbox("性別（任意）", ["選択してください", "男性", "女性", "その他"])
-            
-            # name = st.text_input("お名前（任意）")
-            # email = st.text_input("メールアドレス（任意）")
+
             message = st.text_area("メッセージ")
             submitted = st.form_submit_button("送信")
 
@@ -392,8 +463,11 @@ def main():
                 if not message.strip():
                     st.error("メッセージを入力してください。")
                 else:
-                    save_contact(name, email, message)
+                    # gender が未選択なら空扱いにして保存
+                    gender_value = "" if gender == "選択してください" else gender
+                    save_contact(name, email, int(age), gender_value, message)
                     st.success("メッセージを送信しました。")
+
     st.empty()
     st.markdown("<div style='height:100px;'></div>", unsafe_allow_html=True)
 

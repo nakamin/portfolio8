@@ -13,10 +13,10 @@ FX_CACHE      =  RAW_DIR / "fx_usdjpy.csv"
 BRENT_CACHE   = RAW_DIR / "brent_daily.csv"
 GAS_CACHE     = RAW_DIR / "gas_henryhub_daily.csv"
 COAL_M_CACHE  = RAW_DIR / "coal_worldbank_monthly.csv"
-ALL_CACHE  = RAW_DIR / "all_comodity.csv"
+ALL_CACHE  = RAW_DIR / "all_comodity.csv" # 90日前
 
-COM_PATH_DAY = PROC_DIR / "fx_commodity_day.parquet"
-COM_PATH_AF1W = PROC_DIR / "fx_commodity_30min_af1w.parquet"
+COM_PATH_DAY = PROC_DIR / "fx_commodity_day.parquet" # 90日前
+COM_PATH_AF1W = PROC_DIR / "fx_commodity_30min_af1w.parquet" # 90日前
 
 # ---- 共通ユーティリティ ----
 def _req(url, params=None, timeout=30, max_retry=3):
@@ -400,15 +400,13 @@ def build_feature_table(start, end):
     print("df(commodities combined): \n", df)
     
     _save_cache(df, ALL_CACHE)
-    latest_df = df.tail(8).reset_index(drop=True)
-    latest_df["timestamp"] = pd.to_datetime(latest_df["timestamp"], errors="coerce")
-    print("latent_df: \n", latest_df)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    print("df: \n", df)
     
-    latest_df.to_parquet(COM_PATH_DAY)
+    df.to_parquet(COM_PATH_DAY)
     print(f"[OK] market unified: {COM_PATH_DAY}")
     
-
-    extended_market = expand_daily_to_30min(latest_df, ["USDJPY", "brent", "henry_hub", "coal_aus"])
+    extended_market = expand_daily_to_30min(df, ["USDJPY", "brent", "henry_hub", "coal_aus"])
     last_row = extended_market.iloc[-1].copy()
     # 開始時刻（最後の行の日時）
     start_time = last_row["timestamp"]
@@ -431,7 +429,7 @@ def build_feature_table(start, end):
 def fetch_market():
     
         # 今日までのデータを取得する
-        start, end = _range_to_today(days_back=10)
+        start, end = _range_to_today(days_back=90)
         build_feature_table(start, end)
 
 if __name__ == "__main__":
