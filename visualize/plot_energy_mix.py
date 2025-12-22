@@ -110,12 +110,13 @@ def plot_energy_mix(out_df: pd.DataFrame, now_floor):
         # 下側（需要）をダミーで描く
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["predicted_demand"],
-            showlegend=False, line=dict(width=0), hoverinfo="skip"
+            showlegend=False, line=dict(width=0), hoverinfo="skip",
+            hoverlabel=None, name="", hovertemplate=None
         ))
         # 上側（需要＋予備力）
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["predicted_demand"] + df["reserve"],
-            name="予備力帯",
+            name="予備力",
             fill="tonexty", fillcolor="rgba(255,165,0,0.15)",
             line=dict(width=0),
             hovertemplate="%{x|%H:%M}<br>予備力: %{customdata:.0f} MW",
@@ -191,14 +192,16 @@ def plot_energy_mix(out_df: pd.DataFrame, now_floor):
         font=dict(color="red", size=12),
         align="center"
     )  
-
+    
+    one_day_ms = 24 * 60 * 60 * 1000
     one_hours_ms = 60 * 60 * 1000  # 1時間ごとに縦グリッド
     fig = style_figure(
         fig,
         x_title="時刻",
         y_title="電力 [MW]",
-        x_dtick=one_hours_ms,  # グリッドを細かく
-        y_dtick=1000,
+        x_dtick=one_day_ms,
+        x_minor_dtick=one_hours_ms,  # グリッドを細かく
+        y_dtick=2000,
     )
 
     # そのあとで、このグラフ固有のレイアウトを上書き
@@ -209,5 +212,20 @@ def plot_energy_mix(out_df: pd.DataFrame, now_floor):
         margin=dict(l=60, r=60, t=60, b=40),
         height=560,
     )
+
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b>: %{y:,.1f} MW<extra></extra>"
+    )
+
+    fig.update_xaxes(hoverformat="%Y/%m/%d %H:%M")
+
+    fig.for_each_trace(
+        lambda trace: trace.update(hovertemplate="<b>%{fullData.name}</b>: %{y:,.0f} 円<extra></extra>")
+        if trace.name and "コスト" in trace.name else ()
+    )
+    fig.for_each_trace(
+    lambda trace: trace.update(hoverinfo="skip", hovertemplate=None)
+    if not trace.name else ()
+)
 
     return fig

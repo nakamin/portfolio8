@@ -53,9 +53,9 @@ def main():
                 "lng": "EIA / yfinance NG=F",
             },
             "jepx": "JEPX 日前スポット 東京エリア",
-            "demand_model": "自作需要予測モデル",
-            "price_model": "自作価格予測モデル",
-            "optimizer": "自作数理最適化モデル",
+            "demand_model": "需要予測モデル",
+            "price_model": "価格予測モデル",
+            "optimizer": "数理最適化モデル",
         },
     }
     meta_path = CACHE_DIR / "metadata.json"

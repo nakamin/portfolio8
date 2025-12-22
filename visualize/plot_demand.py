@@ -47,13 +47,21 @@ def plot_demand(demand, now_floor):
 
 
     six_hours_ms = 6 * 60 * 60 * 1000  # 6時間ごとに縦グリッド
+    one_day_ms = 24 * 60 * 60 * 1000 # 1日ごと
+    
     fig_d = style_figure(
         fig_d,
         x_title="日時",
         y_title="電力需要 [MW]",
-        x_dtick=six_hours_ms,  # グリッドを細かく
-        y_dtick=1000,
+        x_dtick=one_day_ms,
+        x_minor_dtick=six_hours_ms,  # グリッドを細かく
+        y_dtick=2000,
     )
-    fig_d.update_xaxes(tickangle=-45)
+
+    fig_d.update_traces(
+        # ホバーのヘッダー部分（時間）の形式を指定
+        hovertemplate="<b>%{x|%Y/%m/%d %H:%M}</b><br>" + 
+                    "%{fullData.name}: %{y:,.0f} MW<extra></extra>"
+    )
     
     return fig_d

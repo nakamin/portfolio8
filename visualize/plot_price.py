@@ -113,15 +113,22 @@ def plot_price(price_fc, today, now_floor):
         font=dict(color="red", size=12),
         align="center"
     )
-
+    
+    one_day_ms = 24 * 60 * 60 * 1000
     six_hours_ms = 6 * 60 * 60 * 1000  # 6時間ごとに縦グリッド
     fig_p = style_figure(
         fig_p,
         x_title="日時",
         y_title="価格 [円/kWh]",
-        x_dtick=six_hours_ms,  # グリッドを細かく
-        y_dtick=10,
+        x_dtick=one_day_ms,
+        x_minor_dtick=six_hours_ms,  # グリッドを細かく
+        y_dtick=5,
     )
-    fig_p.update_xaxes(tickangle=-45)
+    
+    fig_p.update_traces(
+        # ホバーのヘッダー部分（時間）の形式を指定
+        hovertemplate="<b>%{x|%Y/%m/%d %H:%M}</b><br>" + 
+                    "%{fullData.name}: %{y:,.0f} 円<extra></extra>"
+    )
     
     return fig_p
