@@ -106,56 +106,68 @@ def update_actual_last_month(last_month_df):
     print(f"[update_actual] updated {ACTUAL_PATH} (rows={len(combined)})")
 
 def fetch_demand():
-    """当月CSVをDLして前日分とバンド（同月同時刻のmin/max）を用意する"""
+    """
+    - 1-7日: 前月と当月のCSVを結合して取得
+    - 8日以降: 当月のCSVのみ取得
+    - 8日当日: 前月分を確定版としてキャッシュ保存 (update_actual_last_month)
+    """
 
     # 昨日の日付起算で当月を取得
     today = datetime.now(JST)
     print(f"Today: {today}")
-    before_1w = (today - timedelta(days=7)).date()
-    yesterday = (today - timedelta(days=1)).date()
-    target_ym = before_1w.strftime("%Y%m")
-    print(f"Target date: {before_1w} (YM={target_ym})")
-
-    with requests.Session() as s:
-        # 当月を探す
-        csv_url = _get_month_csv_url(session=s, target_ym=target_ym)
-        # csv_url = None
-        # 前月を探す
-        if not csv_url:
-            prev_month_ym = (before_1w - timedelta(days=31)).strftime("%Y%m")
-            print(f"{target_ym} is not found.Let's search {prev_month_ym}")
-            csv_url = _get_month_csv_url(session=s, target_ym=prev_month_ym)
-        if not csv_url:
-            print("We could not find prev_month_ym csv")
-        
-        print("csv_url: ", csv_url)
-        response = s.get(csv_url[0], timeout=30)
-        response.encoding = "MacRoman"
-        content = response.content.decode("MacRoman")  # bytes → str
-
-        # CSV文字列をファイルのように扱う
-        # df = pd.read_csv(StringIO(content), skiprows=2, header=None)
-        df = read_demand_csv(content)
-        # df.columns = columns
     
-    if df is None:
-        print("We could not get csv itself, so update the demand.")
-        return 
+    this_month_ym = today.strftime("%Y%m")
+    last_month_ym = (today.replace(day=1) - timedelta(days=1)).strftime("%Y%m")
 
-    # 毎月8日以外は何もしない
-    if today.day == UPDATE_ACTION_DAY:
-        print(f"[update_actual] today.day == {UPDATE_ACTION_DAY} → concat") # optimizeのときのestimate_pmax_long_termで使用するactual.parquetが更新される
-        
-        prev_month_ym = (before_1w - timedelta(days=31)).strftime("%Y%m")
-        csv_url = _get_month_csv_url(session=s, target_ym=prev_month_ym)
-        print("csv_url: ", csv_url)
-        response = s.get(csv_url[0], timeout=30)
-        response.encoding = "MacRoman"
-        content = response.content.decode("MacRoman")  # bytes → str
-        last_month_df = read_demand_csv(content)
-        update_actual_last_month(last_month_df)
+    is_early_month = today.day <= 7
+    is_update_day = today.day == 8
+
+    # 取得候補のリスト（1-7日なら [前月, 当月]、8日以降なら [当月]）
+    target_yms = [last_month_ym, this_month_ym] if is_early_month else [this_month_ym]
+    
+    dfs = []
+    with requests.Session() as s:
+        for ym in target_yms:
+            print(f"Searching for YM: {ym}")
+            csv_urls = _get_month_csv_url(session=s, target_ym=ym)
+            
+            if csv_urls:
+                print(f"Fetching: {csv_urls[0]}")
+                response = s.get(csv_urls[0], timeout=30)
+                response.encoding = "MacRoman"
+                content = response.content.decode("MacRoman")
+                
+                month_df = read_demand_csv(content)
+                if month_df is not None:
+                    dfs.append(month_df)
+                    
+                    # 8日の場合、前月分を取得したタイミングでキャッシュ更新
+                    if is_update_day and ym == last_month_ym:
+                        print(f"Today is 8th. Updating actual cache for {last_month_ym}")
+                        update_actual_last_month(month_df)
+
+        # 8日に当月分しかリストにない場合、前月分を別途取得してキャッシュ更新
+        if is_update_day and len(dfs) > 0 and not any(d['date'].dt.strftime('%Y%m').iloc[0] == last_month_ym for d in dfs if not d.empty):
+            # 8日はtarget_ymsが[this_month]のみになるため、ここで前月分を処理
+            prev_urls = _get_month_csv_url(session=s, target_ym=last_month_ym)
+            if prev_urls:
+                resp = s.get(prev_urls[0], timeout=30)
+                prev_content = resp.content.decode("MacRoman")
+                prev_df = read_demand_csv(prev_content)
+                update_actual_last_month(prev_df)
+
+    # データの結合
+    if not dfs:
+        print("No CSV data found.")
+        return None
+
+    df = pd.concat(dfs, ignore_index=True)
+    print("[Concat]dfs: \n", df)
     
     # 1週間前から昨日までを抽出
+    before_1w = (today - timedelta(days=7)).date()
+    yesterday = (today - timedelta(days=1)).date()
+    print(f"[Filter] from {before_1w} to {yesterday}")
     prev = df[(df["timestamp"].dt.date >= before_1w)&(df["timestamp"].dt.date <= yesterday)].copy().reset_index(drop=True)
 
     if prev.empty:
