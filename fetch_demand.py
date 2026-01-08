@@ -98,7 +98,7 @@ def update_actual_last_month(last_month_df):
     else:
         combined = last_month_df
     
-    combined.drop(columns=["date", "time"], inplace=True)
+    combined.drop(columns=["date", "time"], inplace=True, errors="ignore")
     print("combined: \n", combined)
 
     # 書き出し
@@ -147,7 +147,7 @@ def fetch_demand():
                         update_actual_last_month(month_df)
 
         # 8日に当月分しかリストにない場合、前月分を別途取得してキャッシュ更新
-        if is_update_day and len(dfs) > 0 and not any(d['date'].dt.strftime('%Y%m').iloc[0] == last_month_ym for d in dfs if not d.empty):
+        if is_update_day and len(dfs) > 0 and not any(d['timestamp'].dt.strftime('%Y%m').iloc[0] == last_month_ym for d in dfs if not d.empty):
             # 8日はtarget_ymsが[this_month]のみになるため、ここで前月分を処理
             prev_urls = _get_month_csv_url(session=s, target_ym=last_month_ym)
             if prev_urls:
