@@ -8,7 +8,7 @@ dependencies:
   - python=3.11
   - pip
   - typing-extensions >=4.8.0
-  - numpy
+  - numpy=1.23 # pygamを使えない
   - scipy
   - pandas
   - scikit-learn
