@@ -23,12 +23,24 @@ jobs:
           environment-file: environment.yaml
           python-version: 3.11
           auto-activate-base: false
+          use-only-tar-bz2: true # キャッシュの圧縮効率と安定性を高める
+          cache-environment: true
+          cache-environment-key: ${{ runner.os }}-conda-${{ hashFiles('environment.yaml') }}
 
-      - name: Install dependencies
-        run: |
-          conda env update -n op_py311 -f environment.yaml
+      # - name: Install dependencies
+      #   run: |
+      #     conda env update -n op_py311 -f environment.yaml
+
+      - name: Cache Playwright browsers
+        id: cache-playwright # idを付与
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('environment.yaml') }}
+          # Playwrightのバージョンをキーに含める→バージョンが上がった際にブラウザの再取得
 
       - name: Install Playwright browsers
+        if: steps.cache-playwright.outputs.cache-hit != 'true'
         run: conda run -n op_py311 python -m playwright install # モジュールをスクリプトとして実行する
 
       - name: Run daily pipeline
