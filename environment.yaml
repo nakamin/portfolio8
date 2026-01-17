@@ -2,7 +2,7 @@ name: op_py311
 channels:
   - conda-forge
   - pytorch
-  - nvidia
+  # - nvidia
   - defaults
 dependencies:
   - python=3.11
@@ -17,7 +17,7 @@ dependencies:
   - pytorch=2.5.1
   - torchvision=0.20.1
   - torchaudio=2.5.1
-  - pytorch-cuda=12.4
+  # - pytorch-cuda=12.4 -> 推論のみなのでGPU不要
   - lightgbm
   - pygam
   - huggingface_hub
