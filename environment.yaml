@@ -12,34 +12,36 @@ dependencies:
   - scipy
   - pandas
   - scikit-learn
-  - matplotlib
-  - seaborn
+  # - matplotlib
+  # - seaborn
   - pytorch=2.5.1
-  - torchvision=0.20.1
-  - torchaudio=2.5.1
+  - cpuonly
+  # - torchvision=0.20.1
+  # - torchaudio=2.5.1
   # - pytorch-cuda=12.4 -> 推論のみなのでGPU不要
   - lightgbm
   - pygam
   - huggingface_hub
-  - tqdm
-  - pyyaml
+  # - tqdm
+  # - pyyaml
   # - jupyterlab
   # - ipykernel
   # - notebook
   # - ipywidgets
   - sqlalchemy
-  - chardet
-  - plotly
-  - streamlit
+  - pyarrow
+  # - chardet
+  # - plotly
+  # - streamlit
   - openpyxl
   - pip:
       # - mlflow==2.17
       # - hydra-core
       - requests
-      - mip
-      - pulp
+      # - mip
+      # - pulp
       - jpholiday
-      - cvxopt
+      # - cvxopt
       - playwright
       - highspy # condaではエラーになる
       - pyomo
