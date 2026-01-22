@@ -1,8 +1,10 @@
 import re, os, io, time
 from datetime import datetime, timedelta, timezone
 import pandas as pd
-import requests
 from pathlib import Path
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ===== 設定 =====
 RAW_DIR = Path("data/raw")
@@ -19,22 +21,36 @@ COM_PATH_DAY = PROC_DIR / "fx_commodity_day.parquet" # 90日前
 COM_PATH_AF1W = PROC_DIR / "fx_commodity_30min_af1w.parquet" # 90日前
 
 # ---- 共通ユーティリティ ----
-def _req(url, params=None, timeout=30, max_retry=3):
+def _build_session():
     """
-    - URLからparamsで指定したデータを取得する
+    Retryルールを定義してそのルールを使うSessionを作る
     """
-    
-    last = None
-    for i in range(max_retry):
-        try:
-            r = requests.get(url, params=params, timeout=timeout)
-            if r.status_code == 200:
-                return r
-            last = f"HTTP {r.status_code}: {r.text[:200]}"
-        except Exception as e:
-            last = str(e)
-        time.sleep(1.5 * (i + 1))
-    raise RuntimeError(f"Request failed: {url} ({last})")
+    retry = Retry(
+        total=6,                  # 最大6回（初回+5回再試行）
+        connect=6, read=6, status=6, # 接続できない/応答が来ない/HTTPステータスエラー
+        backoff_factor=1.0,       # 指数バックオフ
+        status_forcelist=[429, 500, 502, 503, 504], # このステータスがきたら再試行
+        allowed_methods=["GET"],
+        raise_on_status=False, # 例外を投げずにリトライを続ける
+        respect_retry_after_header=True, # サーバーが返した秒数を待つ
+    )
+    # Session経由の通信はすべて自動リトライの対象
+    s = requests.Session()
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+# グローバルに一回だけ作る
+_SESSION = _build_session()
+
+def _req(url, params=None, timeout=(5, 30)):
+    """Session 経由で通信する"""
+    # TODO 共通HTTPモジュールを作って他のpyにも渡せるようにするとよい
+    r = _SESSION.get(url, params=params, timeout=timeout)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Request failed: {url} (HTTP {r.status_code}: {r.text[:200]})")
+    return r
 
 def _clip(df, date_col, start, end):
     """dfの日次範囲を指定する"""
