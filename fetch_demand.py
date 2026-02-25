@@ -145,6 +145,26 @@ def fetch_demand():
                     if is_update_day and ym == last_month_ym:
                         print(f"Today is 8th. Updating actual cache for {last_month_ym}")
                         update_actual_last_month(month_df)
+            
+            # 当月分がまだ取得できない場合は前月分で補完する
+            elif ym == this_month_ym and len(dfs) > 0:
+                print(f"[WARNING] CSV for {ym} not found. Generating fallback data from 7 days ago.")
+                last_df = dfs[-1]
+                fallback_df = last_df.tail(48 * 7).copy()
+                fallback_df.index = fallback_df.index + timedelta(days=7)
+                
+                yesterday_2330 = (datetime.now() - timedelta(days=1)).replace(
+                    hour=23, minute=30, second=0, microsecond=0
+                ) # 前日の23:30を指定
+                
+                # 前日の23:30以前のデータのみを抽出
+                fallback_df = fallback_df[fallback_df.index <= yesterday_2330]
+                
+                dfs.append(fallback_df)
+                print(f"Generated {len(fallback_df)} rows of fallback data.")
+                
+            else:
+                print("[ERROR] Not enough data in previous month to create 7-day fallback.")
 
         # 8日に当月分しかリストにない場合、前月分を別途取得してキャッシュ更新
         if is_update_day and len(dfs) > 0 and not any(d['timestamp'].dt.strftime('%Y%m').iloc[0] == last_month_ym for d in dfs if not d.empty):
