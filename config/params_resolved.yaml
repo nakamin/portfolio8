@@ -56,66 +56,66 @@ capacity:
       mode: estimate
       stat: avg
   pmax_today:
-    lng: 28903.350000000002
-    coal: 7807.8
-    oil: 835.8000000000001
-    th_other: 1944.6000000000001
-    hydro: 1921.5
-    biomass: 476.70000000000005
-    misc: 365.5718528995757
-    pstorage: 3495.4500000000003
-    battery: 32.550000000000004
-    tie: 6750.450000000001
+    lng: 22275.75
+    coal: 6745.200000000001
+    oil: 357.0
+    th_other: 1525.65
+    hydro: 1251.6000000000001
+    biomass: 479.8473833097596
+    misc: 341.25
+    pstorage: 3851.4
+    battery: 34.65
+    tie: 5085.150000000001
 hydro:
-  P_max: 1922.0
+  P_max: 1252.0
   RU: 150
   RD: 150
   E_day: 25000
 thermal:
   coal:
-    P_max: 7808.0
+    P_max: 6745.0
     RU: 300
     RD: 300
     c: 7000
   oil:
-    P_max: 836.0
+    P_max: 357.0
     RU: 300
     RD: 300
     c: 13000
   lng:
-    P_max: 28903.0
+    P_max: 22276.0
     RU: 300
     RD: 300
     c: 12000
   th_other:
-    P_max: 1945.0
+    P_max: 1526.0
     RU: 150
     RD: 150
     c: 11000
   biomass:
-    P_max: 477.0
+    P_max: 480.0
     RU: 80
     RD: 80
     c: 5000
   misc:
-    P_max: 366.0
+    P_max: 341.0
     RU: 100
     RD: 100
     c: 9000
 tie:
-  cap: 6750.0
+  cap: 5085.0
   c_import: 13000
 battery:
   E_max: 2000
   P_ch_max: 500
-  P_dis_max: 33.0
+  P_dis_max: 35.0
   eta_ch: 0.95
   eta_dis: 0.95
   E0: 1000
 pstorage:
   E_max: 10000
   P_pump_max: 1500
-  P_gen_max: 3495.0
+  P_gen_max: 3851.0
   eta_pump: 0.9
   eta_gen: 0.9
   E0: 5000

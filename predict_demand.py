@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import pandas as pd
 from typing import Any
 from pathlib import Path
@@ -16,6 +17,8 @@ CACHE_DIR = Path("data/cache")
 WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 DEMAND_REALIZED_PATH = CACHE_DIR / "demand_bf1w_ytd.parquet"
 DEMAND_OUT_PATH = CACHE_DIR / "demand_forecast.parquet"
+DEMAND_EVAL_OUT_PATH = CACHE_DIR / "demand_evaluation.parquet"
+DEMAND_HISTORY_PATH = CACHE_DIR / "demand_forecast_history.parquet"
 
 HF_REPO_ID = "nakamichan/power-forecast-models"
 DEMAND_MODEL = "model_demand.pth"
@@ -173,9 +176,81 @@ def predict_demand():
     )
     out["demand"] = out["predicted_demand"].fillna(out["realized_demand"])
     print("final_out:\n", out)
-    
     out.to_parquet(DEMAND_OUT_PATH, index=False)
     print(f"[SAVE] demand forecast to {DEMAND_OUT_PATH}")
+
+    # 評価用
+    today = pd.Timestamp(_today_jst())
+    tmw_start = pd.to_datetime(today + timedelta(days=1))
+    tmw_end = pd.to_datetime(today + timedelta(days=2))
+
+    pred_tmw_only = pred_df[
+        (pred_df["timestamp"] >= tmw_start) &
+        (pred_df["timestamp"] < tmw_end)
+    ].copy()
+
+    pred_tmw_only["forecast_date"] = pd.to_datetime(today)
+    pred_tmw_only["horizon_days"] = 1
+
+    if DEMAND_HISTORY_PATH.exists():
+        hist = pd.read_parquet(DEMAND_HISTORY_PATH)
+    else:
+        hist = pd.DataFrame(columns=[
+            "forecast_date", "horizon_days", "timestamp", "predicted_demand"
+        ])
+
+    hist = pd.concat([hist, pred_tmw_only], axis=0, ignore_index=True)
+
+    hist = hist.drop_duplicates(
+        subset=["forecast_date", "timestamp", "horizon_days"],
+        keep="last"
+    ).sort_values(["forecast_date", "timestamp"]).reset_index(drop=True)
+
+    hist.to_parquet(DEMAND_HISTORY_PATH, index=False)
+    print(f"[SAVE] demand history {tmw_start} to {DEMAND_HISTORY_PATH}")
+
+
+    if DEMAND_HISTORY_PATH.exists():
+        hist = pd.read_parquet(DEMAND_HISTORY_PATH)
+    else:
+        hist = pd.DataFrame(columns=[
+            "forecast_date", "horizon_days", "timestamp", "predicted_demand"
+        ])
+
+    eval_df = hist.merge(
+        demand[["timestamp", "realized_demand"]],
+        on="timestamp",
+        how="inner",
+    ).copy()
+
+    eval_df["forecast_date"] = pd.to_datetime(eval_df["forecast_date"])
+    cutoff = pd.to_datetime(today - timedelta(days=7))
+
+    eval_df = eval_df[
+        (eval_df["horizon_days"] == 1) &
+        (eval_df["forecast_date"] >= cutoff)
+    ].copy()
+
+    eval_df["error"] = eval_df["predicted_demand"] - eval_df["realized_demand"]
+    eval_df["squared_error"] = eval_df["error"] ** 2
+    eval_df["timestamp_30min"] = eval_df["timestamp"].dt.strftime("%H:%M")
+
+    rmse_df = (
+        eval_df.groupby("timestamp_30min", as_index=False)["squared_error"]
+        .mean()
+    )
+    rmse_df["rmse"] = np.sqrt(rmse_df["squared_error"])
+    rmse_df = rmse_df.drop(columns=["squared_error"])
+
+    n_df = (
+        eval_df.groupby("timestamp_30min", as_index=False)
+        .size()
+        .rename(columns={"size": "n_samples"})
+    )
+    rmse_df = rmse_df.merge(n_df, on="timestamp_30min", how="left")
+
+    rmse_df.to_parquet(DEMAND_EVAL_OUT_PATH, index=False)
+    print(f"[SAVE] demand evaluation to {DEMAND_EVAL_OUT_PATH}")
 
 if __name__ == "__main__":
     predict_demand()

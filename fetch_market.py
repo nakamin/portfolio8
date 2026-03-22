@@ -428,8 +428,8 @@ def build_feature_table(start, end):
     start_time = last_row["timestamp"]
     # 新しい行を格納するリスト
     new_rows = []
-    # 30分刻みで6日分（48 × 6 = 336回）
-    for i in range(1, 48 * 6 + 1):
+    # 30分刻みで7日分（48 × 7)
+    for i in range(1, 48 * 7 + 1):
         new_row = last_row.copy()
         new_row["timestamp"] = start_time + pd.Timedelta(minutes=30 * i)
         new_rows.append(new_row)

@@ -122,7 +122,7 @@ def fetch_weather():
     lat, lon = 35.6812, 139.7671
     build_openmeteo_daily(
         lat=lat, lon=lon, tz="Asia/Tokyo",
-        past_days=7, forecast_days=7
+        past_days=7, forecast_days=8
     )
         
 if __name__ == "__main__":

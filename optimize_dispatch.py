@@ -23,7 +23,9 @@ WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 CONFIG_PATH = Path("config/params.yaml")
 CONFIG_RESOLVED_PATH = Path("config/params_resolved.yaml")
 
-OUT_PATH = CACHE_DIR / "dispatch_optimal.parquet"
+DISPATCH_HISTORY_PATH = CACHE_DIR / "dispatch_history.parquet" # 今日までの最適化結果を毎日蓄積
+DISPATCH_DISPLAY_PATH = CACHE_DIR / "dispatch_optimal.parquet"   # 表示用に昨日+今日
+DISPATCH_EVAL_PATH = CACHE_DIR / "dispatch_error_yesterday.parquet" # 昨日分だけの電源別ネットエラー
 
 # ==========
 # YAML params
@@ -590,6 +592,32 @@ def optimize_dispatch():
 
     prev_row = demand.loc[[yesterday_2330]]
 
+    # TODO: historyから読み込めるようにしたい
+    # if DISPATCH_HISTORY_PATH.exists():
+    #     dispatch_hist = pd.read_parquet(DISPATCH_HISTORY_PATH)
+    #     dispatch_hist["timestamp"] = pd.to_datetime(dispatch_hist["timestamp"])
+    # else:
+    #     dispatch_hist = pd.DataFrame()
+
+    # prev_row = dispatch_hist.loc[dispatch_hist["timestamp"] == yesterday_2330]
+
+    # if not prev_row.empty:
+    #     row = prev_row.iloc[0]
+    #     params_today["battery"]["E0"] = float(row["battery_soc"])
+    #     params_today["pstorage"]["E0"] = float(row["pstorage_soc"])
+
+    #     init_state = {
+    #         "hy": float(row["hydro"]),
+    #         "coal": float(row["coal"]),
+    #         "oil": float(row["oil"]),
+    #         "lng": float(row["lng"]),
+    #         "th_other": float(row["th_other"]),
+    #         "biomass": float(row["biomass"]),
+    #         "misc": float(row["misc"]),
+    #     }
+    # else:
+    #     init_state = None
+        
     init_state = {
         "hy":   float(prev_row["hydro"]),
         "coal": float(prev_row["coal"]),
@@ -603,11 +631,96 @@ def optimize_dispatch():
     df_ts = pd.merge(pv_wind, demand, how="left", left_on="timestamp", right_index=True)
     # print("df_ts: \n", df_ts)
     out = solve_dispatch(df_ts, costs, params_today, init_state)
+    
+    out["forecast_date"] = pd.to_datetime(today)
+    out["target_date"] = pd.to_datetime(today)
+    
+    if DISPATCH_HISTORY_PATH.exists():
+        hist = pd.read_parquet(DISPATCH_HISTORY_PATH)
+        hist["timestamp"] = pd.to_datetime(hist["timestamp"])
+        hist["forecast_date"] = pd.to_datetime(hist["forecast_date"])
+        hist["target_date"] = pd.to_datetime(hist["target_date"])
+    else:
+        hist = pd.DataFrame()
 
-    print("out: \n", out)    
-    out.to_parquet(OUT_PATH)
-    print(f"[SAVE] dispatch plan to {OUT_PATH}")
+    hist = pd.concat([hist, out], axis=0, ignore_index=True)
 
+    hist = hist.drop_duplicates(
+        subset=["forecast_date", "timestamp"],
+        keep="last"
+    ).sort_values(["forecast_date", "timestamp"]).reset_index(drop=True)
+
+    hist.to_parquet(DISPATCH_HISTORY_PATH, index=False)
+    print(f"[SAVE] dispatch history to {DISPATCH_HISTORY_PATH}")
+    
+    # history から昨日+今日を抜いて、表示用のparquetを使用する
+    display_start = pd.to_datetime(yesterday)
+    display_end = pd.to_datetime(today + timedelta(days=1))
+
+    display_df = hist[
+        (hist["timestamp"] >= display_start) &
+        (hist["timestamp"] < display_end)
+    ].copy()
+
+    display_df.to_parquet(DISPATCH_DISPLAY_PATH , index=False)
+    print(f"[SAVE] dispatch display to {DISPATCH_DISPLAY_PATH }")
+    
+    y_start = pd.to_datetime(yesterday)
+    y_end = pd.to_datetime(today)
+
+    pred_yesterday = hist[
+        (hist["timestamp"] >= y_start) &
+        (hist["timestamp"] < y_end)
+    ].copy()
+
+    actual_df = pd.read_parquet(DEMAND_PATH)
+    actual_df["timestamp"] = pd.to_datetime(actual_df["timestamp"])
+
+    actual_yesterday = actual_df[
+        (actual_df["timestamp"] >= y_start) &
+        (actual_df["timestamp"] < y_end)
+    ].copy()
+
+    actual_df = pd.read_parquet(DEMAND_PATH)
+    actual_df["timestamp"] = pd.to_datetime(actual_df["timestamp"])
+
+    actual_yesterday = actual_df[
+        (actual_df["timestamp"] >= y_start) &
+        (actual_df["timestamp"] < y_end)
+    ].copy()
+    
+    actual_yesterday = actual_yesterday.rename(columns={
+        "pstorage": "pstorage_gen",
+        "battery": "battery_dis",
+        "tie": "import",
+        "pv_curtailed": "curtail_pv",
+        "wind_curtailed": "curtail_wind",
+        "realized_demand": "demand_actual",
+    })
+    print("actual_yesterday: ", actual_yesterday.head())
+
+    compare_cols = [
+        "pv", "wind", "hydro", "coal", "oil", "lng",
+        "th_other", "biomass", "misc",
+        "pstorage_gen", "battery_dis", "import",
+        "curtail_pv", "curtail_wind",
+    ]
+
+    eval_df = pred_yesterday.merge(
+        actual_yesterday[["timestamp"] + compare_cols + ["demand_actual"]],
+        on="timestamp",
+        how="inner",
+        suffixes=("_pred", "_actual")
+    ).copy()
+
+    for col in compare_cols:
+        eval_df[f"{col}_error"] = eval_df[f"{col}_actual"] - eval_df[f"{col}_pred"]
+
+    error_cols = ["timestamp"] + [f"{c}_error" for c in compare_cols]
+    dispatch_error_df = eval_df[error_cols].copy()
+
+    dispatch_error_df.to_parquet(DISPATCH_EVAL_PATH, index=False)
+    print(f"[SAVE] dispatch evaluation to {DISPATCH_EVAL_PATH}")
 
 if __name__ == "__main__":
     optimize_dispatch()
