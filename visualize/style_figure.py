@@ -13,6 +13,7 @@ def style_figure(
     x_dtick=None,
     x_minor_dtick=None,
     y_dtick=None,
+    x_is_datetime: bool = True, # datetime / カテゴリ
 ):
     """
     Plotly 図に共通のスタイルを当てる。
@@ -56,23 +57,12 @@ def style_figure(
         fig.update_yaxes(title_text=y_title)
     
     # 補助目盛
-    if x_minor_dtick is not None:
-            fig.update_xaxes(
-                minor=dict(
-                    dtick=x_minor_dtick,
-                    gridcolor=GRID_MINOR_COLOR,
-                    gridwidth=1,
-                    showgrid=True
-                )
-            )
-        
-    if x_dtick is not None:
-        fig.update_xaxes(
-                dtick=x_dtick,      # 24時間おき
-                gridcolor=GRID_COLOR, # 00:00用の明るい色
-                gridwidth=2,        # ここで線を太くする
-                showgrid=True
-        )
+    if x_is_datetime:
+        if x_dtick is not None:
+            fig.update_xaxes(dtick=x_dtick)
+        if x_minor_dtick is not None:
+            fig.update_xaxes(minor=dict(dtick=x_minor_dtick, showgrid=True))
+        fig.update_xaxes(tickformat="%m/%d\n%H:%M")
         
     if y_dtick is not None:
         fig.update_yaxes(dtick=y_dtick)

@@ -18,6 +18,7 @@ WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 DEMAND_REALIZED_PATH = CACHE_DIR / "demand_bf1w_ytd.parquet"
 DEMAND_OUT_PATH = CACHE_DIR / "demand_forecast.parquet"
 DEMAND_EVAL_OUT_PATH = CACHE_DIR / "demand_evaluation.parquet"
+DEMAND_EVAL_DETAIL_PATH = CACHE_DIR / "demand_evaluation_detail.parquet"
 DEMAND_HISTORY_PATH = CACHE_DIR / "demand_forecast_history.parquet"
 
 HF_REPO_ID = "nakamichan/power-forecast-models"
@@ -234,7 +235,10 @@ def predict_demand():
     eval_df["error"] = eval_df["predicted_demand"] - eval_df["realized_demand"]
     eval_df["squared_error"] = eval_df["error"] ** 2
     eval_df["timestamp_30min"] = eval_df["timestamp"].dt.strftime("%H:%M")
-
+    
+    eval_df.to_parquet(DEMAND_EVAL_DETAIL_PATH, index=False)
+    print(f"[SAVE] demand evaluation detail to {DEMAND_EVAL_DETAIL_PATH}")
+    
     rmse_df = (
         eval_df.groupby("timestamp_30min", as_index=False)["squared_error"]
         .mean()

@@ -9,8 +9,8 @@ import streamlit as st
 import traceback
 
 from visualize.plot_energy_mix import plot_energy_mix
-from visualize.plot_price import plot_price
-from visualize.plot_demand import plot_demand
+from visualize.plot_price import plot_price_with_crps
+from visualize.plot_demand import plot_demand_with_error
 
 # ========================
 # 基本設定
@@ -120,6 +120,99 @@ def jst_now_floor_30min() -> datetime:
     minute = 0 if now.minute < 30 else 30
     return now.replace(minute=minute, second=0, microsecond=0)
 
+def build_demand_display_df(demand_fc, demand_hist, demand_eval, today):
+    past_start = pd.to_datetime(today - timedelta(days=7))
+    future_end = pd.to_datetime(today + timedelta(days=7))
+
+    base = demand_fc[
+        (demand_fc["timestamp"] >= past_start) &
+        (demand_fc["timestamp"] <= future_end)
+    ][["timestamp", "realized_demand", "predicted_demand"]].copy()
+
+    # 未来予測
+    base["predicted_demand_future"] = base["predicted_demand"]
+    base.loc[base["timestamp"] < pd.to_datetime(today), "predicted_demand_future"] = None
+
+    # 過去予測履歴（翌日予測）
+    hist = demand_hist.copy()
+    hist["forecast_date"] = pd.to_datetime(hist["forecast_date"])
+    hist["timestamp"] = pd.to_datetime(hist["timestamp"])
+
+    hist = hist[
+        (hist["timestamp"] >= past_start) &
+        (hist["timestamp"] < pd.to_datetime(today))
+    ][["timestamp", "predicted_demand"]].copy()
+
+    hist = hist.rename(columns={"predicted_demand": "predicted_demand_past"})
+    
+    # 評価
+    eval_df = demand_eval.copy()
+    eval_df["timestamp"] = pd.to_datetime(eval_df["timestamp"])
+    eval_df = eval_df[
+        (eval_df["timestamp"] >= past_start) &
+        (eval_df["timestamp"] < pd.to_datetime(today))
+    ][["timestamp", "predicted_demand", "realized_demand"]].copy()
+
+    eval_df["abs_error"] = (eval_df["predicted_demand"] - eval_df["realized_demand"]).abs()
+    eval_df = eval_df[["timestamp", "abs_error"]]
+
+    out = base.merge(hist, on="timestamp", how="left")
+    out = out.merge(eval_df, on="timestamp", how="left")
+    out["predicted_demand_future_past"] = out["predicted_demand_past"].fillna(out["predicted_demand_future"])
+
+    return out.sort_values("timestamp").reset_index(drop=True)
+
+
+def build_price_display_df(price_fc, price_hist, price_eval, today):
+    past_start = pd.to_datetime(today - timedelta(days=7))
+    future_end = pd.to_datetime(today + timedelta(days=7))
+
+    base = price_fc[
+        (price_fc["timestamp"] >= past_start) &
+        (price_fc["timestamp"] <= future_end)
+    ][[
+        "timestamp",
+        "tokyo_price_jpy_per_kwh",
+        "predicted_price(10%)",
+        "predicted_price(50%)",
+        "predicted_price(90%)"
+    ]].copy()
+
+    # 未来予測
+    base["predicted_price_future(10%)"] = base["predicted_price(10%)"]
+    base["predicted_price_future(50%)"] = base["predicted_price(50%)"]
+    base["predicted_price_future(90%)"] = base["predicted_price(90%)"]
+
+    base.loc[base["timestamp"] < pd.to_datetime(today), [
+        "predicted_price_future(10%)",
+        "predicted_price_future(50%)",
+        "predicted_price_future(90%)"
+    ]] = None
+
+    # 過去予測履歴
+    hist = price_hist.copy()
+    hist["timestamp"] = pd.to_datetime(hist["timestamp"])
+    hist = hist[
+        (hist["timestamp"] >= past_start) &
+        (hist["timestamp"] < pd.to_datetime(today))
+    ][["timestamp", "predicted_price(50%)"]].copy()
+
+    hist = hist.rename(columns={"predicted_price(50%)": "predicted_price_past(50%)"})
+
+    # 評価
+    eval_df = price_eval.copy()
+    eval_df["timestamp"] = pd.to_datetime(eval_df["timestamp"])
+    eval_df = eval_df[
+        (eval_df["timestamp"] >= past_start) &
+        (eval_df["timestamp"] < pd.to_datetime(today))
+    ][["timestamp", "crps"]].copy()
+
+    out = base.merge(hist, on="timestamp", how="left")
+    out = out.merge(eval_df, on="timestamp", how="left")
+    out["predicted_price_future_past(50%)"] = out["predicted_price_past(50%)"].fillna(out["predicted_price_future(50%)"])
+    return out.sort_values("timestamp").reset_index(drop=True)
+
+
 # ========================
 # ヘッダー（画像・説明・現在時刻）
 # ========================
@@ -150,10 +243,6 @@ def main():
 
     now_floor = jst_now_floor_30min()
     today = now_floor.date()
-    demand_from = today
-    demand_to = today + timedelta(days=6)  # 今日を含めて7日間
-    price_from = today + timedelta(days=1)  # 明日スタート
-    price_to = today + timedelta(days=6)    # 6日後まで（6日間）
 
     tab_dashboard, tab_model, tab_pipeline, contact = st.tabs(["ダッシュボード", "モデル説明", "パイプライン説明", "お問い合わせ"])
 
@@ -164,21 +253,13 @@ def main():
 
         st.subheader("1. 電力需要（実績＋予測）")
 
-        demand = load_parquet("demand_forecast", version_key=version)      # predicted_demand / realized_demand / demand など
-        if demand is None:
-            st.stop()
-        print("demand: \n", demand)
+        demand_fc = load_parquet("demand_forecast", version_key=version)
+        demand_hist = load_parquet("demand_forecast_history", version_key=version)
+        demand_eval = load_parquet("demand_evaluation_detail", version_key=version)
 
-        fig_d = plot_demand(demand, now_floor)
-        st.plotly_chart(fig_d)
-        st.markdown(
-        f"""
-        <h4 style="text-align:center; margin-top: 1rem;">
-        予測対象期間：{demand_from:%Y年%m月%d日} 〜 {demand_to:%Y年%m月%d日}（7日間）
-        </h4>
-        """,
-        unsafe_allow_html=True,
-    )
+        demand_display = build_demand_display_df(demand_fc, demand_hist, demand_eval, today)
+        fig_d = plot_demand_with_error(demand_display, now_floor)
+        st.plotly_chart(fig_d, use_container_width=True)
 
         st.markdown("---")
 
@@ -188,22 +269,13 @@ def main():
 
         st.subheader("2. JEPX 東京スポット価格と分位点予測")
 
-        price_fc = load_parquet("price_forecast", version_key=version)          # price / predicted_price(10/50/90) / tokyo_price_jpy_per_kwh
-        if price_fc is None:
-            st.stop()
-        print("price_fc: \n", price_fc)
+        price_fc = load_parquet("price_forecast", version_key=version)
+        price_hist = load_parquet("price_forecast_history", version_key=version)
+        price_eval = load_parquet("price_evaluation_detail", version_key=version)
 
-        fig_p = plot_price(price_fc=price_fc, today=today, now_floor=now_floor)
-        st.plotly_chart(fig_p)
-        
-        st.markdown(
-            f"""
-            <h4 style="text-align:center; margin-top: 1rem;">
-            予測対象期間：{price_from:%Y年%m月%d日} 〜 {price_to:%Y年%m月%d日}（6日間）
-            </h4>
-            """,
-            unsafe_allow_html=True,
-        )
+        price_display = build_price_display_df(price_fc, price_hist, price_eval, today)
+        fig_p = plot_price_with_crps(price_display, now_floor)
+        st.plotly_chart(fig_p, use_container_width=True)
 
         st.markdown("---")
 
@@ -213,22 +285,14 @@ def main():
 
         st.subheader("3. エネルギーミックス（最適化結果）")
 
-        dispatch = load_parquet("dispatch_optimal", version_key=version)
-        if dispatch is None:
-            st.stop()
-        print("dispatch: \n", dispatch)
+        dispatch_display = load_parquet("dispatch_optimal", version_key=version)
+        dispatch_error = load_parquet("dispatch_error_yesterday", version_key=version)
 
-        fig_balance = plot_energy_mix(dispatch, now_floor)
-        st.plotly_chart(fig_balance)
-        
-        st.markdown(
-        f"""
-        <h4 style="text-align:center; margin-top: 1rem;">
-        予測対象日：{today:%Y年%m月%d日}
-        </h4>
-        """,
-        unsafe_allow_html=True,
-    )
+        if dispatch_display is None or dispatch_error is None:
+            st.stop()
+
+        fig_balance = plot_energy_mix(dispatch_display, dispatch_error, now_floor)
+        st.plotly_chart(fig_balance, use_container_width=True)
 
 
     with tab_model:

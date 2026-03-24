@@ -18,6 +18,7 @@ DEMAND_PATH = CACHE_DIR / "demand_forecast.parquet" # 実績も入っている
 WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 MARKET_PATH = CACHE_DIR / "fx_commodity_30min_af1w.parquet"
 PRICE_PATH = CACHE_DIR / "spot_tokyo_bf1w_tdy.parquet"
+PRICE_EVAL_DETAIl_PATH = CACHE_DIR / "price_evaluation_detail.parquet"
 PRICE_HISTORY_PATH = CACHE_DIR / "price_forecast_history.parquet"
 
 # モデル
@@ -377,7 +378,9 @@ def predict_price():
     print("確認: ", eval_df)
     eval_df["crps"] = eval_df.apply(row_crps, axis=1)
     eval_df["timestamp_30min"] = eval_df["timestamp"].dt.strftime("%H:%M")
-
+    eval_df.to_parquet(PRICE_EVAL_DETAIl_PATH, index=False)
+    print(f"[SAVE] price evaluation detail to {PRICE_EVAL_DETAIl_PATH}")
+    
     crps_30min = (
         eval_df.groupby("timestamp_30min")["crps"]
         .mean()
