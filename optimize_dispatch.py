@@ -590,33 +590,35 @@ def optimize_dispatch():
     # --- 時系列を結合（最適化で使う） ---
     df_ts = pv_wind.merge(demand, how="left", left_on="timestamp", right_index=True)
 
-    prev_row = demand.loc[[yesterday_2330]]
+    # prev_row = demand.loc[[yesterday_2330]]
 
-    # TODO: historyから読み込めるようにしたい
-    # if DISPATCH_HISTORY_PATH.exists():
-    #     dispatch_hist = pd.read_parquet(DISPATCH_HISTORY_PATH)
-    #     dispatch_hist["timestamp"] = pd.to_datetime(dispatch_hist["timestamp"])
-    # else:
-    #     dispatch_hist = pd.DataFrame()
+    # 前日から引き継ぐ最適化結果
+    if DISPATCH_HISTORY_PATH.exists():
+        dispatch_hist = pd.read_parquet(DISPATCH_HISTORY_PATH)
+        dispatch_hist["timestamp"] = pd.to_datetime(dispatch_hist["timestamp"])
+        prev_row = dispatch_hist.loc[dispatch_hist["timestamp"] == yesterday_2330]
+    else:
+        prev_row = pd.DataFrame()
 
-    # prev_row = dispatch_hist.loc[dispatch_hist["timestamp"] == yesterday_2330]
+    if not prev_row.empty:
+        row = prev_row.iloc[0]
 
-    # if not prev_row.empty:
-    #     row = prev_row.iloc[0]
-    #     params_today["battery"]["E0"] = float(row["battery_soc"])
-    #     params_today["pstorage"]["E0"] = float(row["pstorage_soc"])
+        # SOC を引き継ぐ
+        params_today["battery"]["E0"] = float(row["battery_soc"])
+        params_today["pstorage"]["E0"] = float(row["pstorage_soc"])
 
-    #     init_state = {
-    #         "hy": float(row["hydro"]),
-    #         "coal": float(row["coal"]),
-    #         "oil": float(row["oil"]),
-    #         "lng": float(row["lng"]),
-    #         "th_other": float(row["th_other"]),
-    #         "biomass": float(row["biomass"]),
-    #         "misc": float(row["misc"]),
-    #     }
-    # else:
-    #     init_state = None
+        # 出力初期値を引き継ぐ
+        init_state = {
+            "hy": float(row["hydro"]),
+            "coal": float(row["coal"]),
+            "oil": float(row["oil"]),
+            "lng": float(row["lng"]),
+            "th_other": float(row["th_other"]),
+            "biomass": float(row["biomass"]),
+            "misc": float(row["misc"]),
+        }
+    else:
+        init_state = None
         
     init_state = {
         "hy":   float(prev_row["hydro"]),
