@@ -238,6 +238,11 @@ def main():
         st.caption(f"データ更新時刻: {last_jst.strftime('%Y-%m-%d %H:%M')}（自動更新日時）")
     else:
         st.caption("データ更新時刻: 不明")
+    st.caption(
+        "モデル設計、特徴量エンジニアリング、分析の詳細は "
+        "[Qiita記事](https://qiita.com/nakamin/items/379b890ee07167d9cf36) "
+        "をご覧ください。"
+    )
     
     version = meta.get("last_updated_jst", "no-meta")
 
@@ -251,7 +256,7 @@ def main():
         # セクション1: 需要予測
         # ========================
 
-        st.subheader("1. 電力需要（実績＋予測）")
+        st.subheader("1. 東京エリアの電力需要予測")
 
         demand_fc = load_parquet("demand_forecast", version_key=version)
         demand_hist = load_parquet("demand_forecast_history", version_key=version)
@@ -267,7 +272,7 @@ def main():
         # セクション2: 価格（実績＋分位点予測）予測
         # ========================
 
-        st.subheader("2. JEPX 東京スポット価格と分位点予測")
+        st.subheader("2. JEPX 東京スポット価格の予測")
 
         price_fc = load_parquet("price_forecast", version_key=version)
         price_hist = load_parquet("price_forecast_history", version_key=version)
@@ -283,7 +288,7 @@ def main():
         # セクション3: 発電ミックス最適化結果
         # ========================
 
-        st.subheader("3. エネルギーミックス（最適化結果）")
+        st.subheader("3. エネルギーミックス最適化")
 
         dispatch_display = load_parquet("dispatch_optimal", version_key=version)
         dispatch_error = load_parquet("dispatch_error_yesterday", version_key=version)
@@ -302,16 +307,18 @@ def main():
         st.markdown("## モデル一覧（需要 → 価格 → 最適化）")
         st.caption(
             "このダッシュボードは「需要予測 → 価格予測 → 電源構成の最適化」の順に計算し、"
-            "`data/cache/*.parquet` を更新しています。ここでは各モデルの役割・入力・出力をまとめます。"
+            "`data/cache/*.parquet` を更新しています。ここでは各モデルの役割・入力・出力をまとめます"
         )
 
         st.markdown("---")
-        st.markdown("### 需要予測モデル（Demand Forecast）")
+        st.markdown("### 1. 東京エリアの電力需要予測モデル（Demand Forecast）")
 
         st.markdown(
             f"""
     **目的**  
-    - 30分刻みで「明日〜7日先」までの需要（MW）を予測  
+    - 30分刻みで電力需要（MW）を予測する  
+    - 上段では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を1つの時間軸で表示する  
+    - 下段では、過去7日分の翌日予測に対する**各時刻（30分単位）の予測誤差**を表示する
 
     **入力データ**  
     - 気象（実績+予報）：気温 / 湿度 など（`weather_bf1w_af1w.parquet`）  
@@ -321,58 +328,48 @@ def main():
     **モデル**  
     - {sources.get("demand_model", "GRU（時系列モデル）")}  
     - 学習済み重み（`.pth`）と目的変数スケーラ（`scaler_y.pkl`）は Hugging Face Hub に置き、
-    GitHub には毎日更新される cache のみを置く設計です。
-
-    **出力**  
-    - `demand_forecast.parquet`  
-    - `timestamp`（30分刻み）  
-    - `predicted_demand`（需要予測 MW）  
-    - `realized_demand`（取得できる範囲のみ実績 MW）  
-    - `demand`（表示用：予測があれば予測、なければ実績で埋めた列）
+    GitHub には毎日更新される cache のみを置く設計です
             """
         )
 
         st.markdown("---")
-        st.markdown("### 価格予測モデル（Price Forecast）")
+        st.markdown("### 2. JEPX 東京スポット価格予測モデル（Price Forecast）")
 
         st.markdown(
             f"""
     **目的**  
-    - 東京エリアの JEPX スポット価格（円/kWh）を、将来の不確実性（リスクレンジ）込みで推定
-    - ダッシュボード上では「P10 / P50 / P90」のような分位点（下振れ・中央値・上振れ）で表示する
+    - 東京エリアの JEPX スポット価格（円/kWh）を、将来の不確実性を含めて推定する  
+    - 画面上では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を表示する  
+    - 予測は **P10 / P50 / P90** の分位点で表し、下段には各時刻（30単位）の **CRPS** を表示する
+        - CRPS (Continuous Ranked Probability Score)
+            - 意味：予測分布全体と実際の値の差を評価する指標。小さいほど良い
+            - 解釈：
+                - Pinball Lossを全分位点にわたって統合したような指標
+                - 分布全体の予測精度を一つの数値で表す
+                - モデル全体の分布予測の質を比較するのに便利
 
     **入力データ**  
     - 需要：需要予測（`predicted_demand`）および必要なら実績需要  
     - 価格ラグ：過去のJEPX価格（24時間前）  
     - 市況：燃料（Brent / Henry Hub / 石炭など）・為替（USD/JPY など）、ラグ
-    
-    
-      
     - 天候：気温、日照時間、全天日射、風速
 
     **モデル**  
     - {sources.get("price_model", "GAM + LightGBM（分位点回帰）")}  
     - **GAM**：季節性・時刻（sin/cos）・休日など「なめらかな周期構造」を捉える（基礎形状）  
-    - **LightGBM**：燃料・為替・ラグ等の非線形関係を捉え、GAMだけでは取り切れない変動を補正  
-    - 予測時は、学習時と同じ前処理（カテゴリの扱い、欠損処理、特徴量列の順序）を厳密に揃えます。
-
-    **出力**  
-    - `price_forecast.parquet`（想定）  
-    - `timestamp`  
-    - `predicted_price_p10`, `predicted_price_p50`, `predicted_price_p90`  
-    - `tokyo_price_jpy_per_kwh`（取得できる範囲のみ実績）  
-    - `price`（表示用：予測があれば予測、なければ実績で埋めた列）
+    - **LightGBM**：燃料・為替・ラグ等の非線形関係を捉え、GAMだけでは取り切れない変動を補正
+    - 翌日分と、それ以降の期間では使用する価格モデルのラグを変えリークにならないようにしています
             """
         )
 
         st.markdown("---")
-        st.markdown("### 最適化モデル（Dispatch Optimization）")
+        st.markdown("### 3. エネルギーミックス最適化モデル（Dispatch Optimization）")
 
         st.markdown(
             f"""
     **目的**  
-    - 需要予測を満たしつつ、1日分（30分×48）の供給コストを最小化する電源構成を求める
-    - ダッシュボードでは、電源別の積み上げ（PV/風力/水力/火力/蓄電池/揚水/受電…）を可視化
+    - 需要予測を満たしつつ、1日分（30分×48コマ）の供給コストを最小化する電源構成を求める  
+    - 上段では、**昨日分と今日分**の電源構成を積み上げで表示し、下段では**昨日分の電源別ネットエラー**を表示する  
 
     **入力**  
     - 需要：需要予測（`predicted_demand` または `demand`）  
@@ -383,11 +380,7 @@ def main():
 
     **モデル**  
     - {sources.get("optimizer", "数理最適化（線形/混合整数など）")}  
-    - 「予測→最適化→結果保存」までを毎日自動で回し、最新の電源構成を更新します。
-
-    **出力**  
-    - `opt_dispatch.parquet`（想定）  
-    - `timestamp`, `pv`, `wind`, `hydro`, `coal`, `lng`, `oil`, `battery`, `pumped`, `import`, `curtail_*`, `shed`, `total_cost` など  
+    - 「予測→最適化→結果保存」までを毎日自動で回し、最新の電源構成を更新します
             """
         )
 
@@ -399,9 +392,9 @@ def main():
 
         st.markdown("## パイプライン概要（毎日自動更新）")
         st.caption(
-            "このプロジェクトは「毎日データを取り直し → 予測 → 最適化 → cache保存」を繰り返しています。"
+            "このダッシュボードは「毎日データを取り直し → 予測 → 最適化 → cache保存」を繰り返しています。"
         )
-
+        st.markdown("---")
         st.markdown("### 全体フロー")
         st.markdown(
             """
@@ -421,7 +414,7 @@ def main():
             f"""
     - 需要実績: {src.get("demand", "TEPCO でんき予報 エリア需給実績データ）")}  
     - 市場価格: {src.get("jepx", "JEPX 日前スポット（東京エリア）")}  
-    - JEPXはページ操作後にダウンロードが発生するため、Playwrightでブラウザ操作を自動化しています。
+    - JEPXはページ操作後にダウンロードが発生するため、Playwrightでブラウザ操作を自動化しています
             """
         )
 
@@ -429,7 +422,7 @@ def main():
         st.markdown(
             f"""
     - {src.get('weather', 'Open-Meteo（JMAベース）など')}  
-    - 「一週間前〜一週間後」をまとめて取得し、需要・価格の特徴量に利用します。
+    - 「一週間前〜一週間後」をまとめて取得し、需要・価格の特徴量に利用します
             """
         )
 

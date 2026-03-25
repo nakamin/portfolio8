@@ -58,7 +58,7 @@ def plot_demand_with_error(demand_df, now_floor):
         go.Bar(
             x=err["timestamp"],
             y=err["abs_error"],
-            name="|予測-実績|",
+            name="| 予測 - 実績 |",
             marker_color="#FFCA28",
         ),
         row=2, col=1

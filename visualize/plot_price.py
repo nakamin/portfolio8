@@ -54,7 +54,7 @@ def plot_price_with_crps(price_df, now_floor):
             y=future_pred["predicted_price_future(10%)"],
             mode="lines",
             fill="tonexty",
-            name="価格予測 P10-P90",
+            name="価格予測 P10 - P90",
             line=dict(width=0, color="#FA9A8D"),
             opacity=0.2,
         ),
