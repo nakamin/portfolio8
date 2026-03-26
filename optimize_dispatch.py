@@ -17,8 +17,9 @@ from utils.prepare_opt import prepare_opt, effective_pmax, PV_PR, G_STC
 CACHE_DIR = Path("data/cache")
 DATA_DIR = Path("data")
 
-ACTUAL_DEMAND_PATH = DATA_DIR / "actual.parquet"
-DEMAND_PATH = CACHE_DIR / "demand_forecast.parquet"
+ACTUAL_PAST_DEMAND_PATH = DATA_DIR / "actual.parquet" # long_dfに使用する
+DEMAND_PATH = CACHE_DIR / "demand_forecast.parquet" # predict_demand.pyで保存した予測
+ACTUAL_PATH = CACHE_DIR / "demand_bf1w_ytd.parquet" # fetch_demand.pyで保存した昨日までの実績
 WEATHER_PATH = CACHE_DIR / "weather_bf1w_af1w.parquet"
 CONFIG_PATH = Path("config/params.yaml")
 CONFIG_RESOLVED_PATH = Path("config/params_resolved.yaml")
@@ -332,12 +333,12 @@ def solve_dispatch(df_ts, costs, params, init_state):
 
     m.Ramp = ConstraintList()
     # t=0
-    m.Ramp.add(m.P_hy[0] - _get_init("hy") <= RU_hy)
-    m.Ramp.add(_get_init("hy") - m.P_hy[0] <= RD_hy)
-    for g in thermal_keys:
-        Pg = getattr(m, f"P_{g}")
-        m.Ramp.add(Pg[0] - _get_init(g) <= RU_th[g])
-        m.Ramp.add(_get_init(g) - Pg[0] <= RD_th[g])
+    # m.Ramp.add(m.P_hy[0] - _get_init("hy") <= RU_hy)
+    # m.Ramp.add(_get_init("hy") - m.P_hy[0] <= RD_hy)
+    # for g in thermal_keys:
+    #     Pg = getattr(m, f"P_{g}")
+    #     m.Ramp.add(Pg[0] - _get_init(g) <= RU_th[g])
+    #     m.Ramp.add(_get_init(g) - Pg[0] <= RD_th[g])
 
     # t>=1
     for t in T[1:]:
@@ -363,8 +364,9 @@ def solve_dispatch(df_ts, costs, params, init_state):
             + m.P_coal[t] + m.P_oil[t] + m.P_lng[t]
             + m.P_th_other[t] + m.P_biomass[t] + m.P_misc[t]
             + m.P_gen[t] + m.P_dis[t] + m.P_imp[t]
+            + m.Shed[t]
         ) == (
-            load[t] + m.P_pump[t] + m.P_ch[t] + m.Shed[t]
+            load[t] + m.P_pump[t] + m.P_ch[t]
         )
 
     m.Balance = Constraint(m.T, rule=balance_rule)
@@ -395,7 +397,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "curtail_wind": [value(m.Curt_wind[t]) for t in T],
         "reserve": [
             value(m.R_hy[t] + m.R_coal[t] + m.R_oil[t] + m.R_lng[t]
-                  + m.R_bat[t] + m.R_ps[t] + m.R_imp[t])
+                + m.R_th_other[t] + m.R_biomass[t] + m.R_misc[t]
+                + m.R_bat[t] + m.R_ps[t] + m.R_imp[t])
             for t in T
         ],
         "shed":    [value(m.Shed[t])    for t in T],
@@ -512,30 +515,17 @@ def optimize_dispatch():
     # today = datetime.now(tz).date() - timedelta(days=1)
     
     yesterday = today - timedelta(days=1)
-    yesterday_2330 = pd.Timestamp(pd.Timestamp(datetime.combine(yesterday, time(23, 30))))
+    yesterday_2330 = pd.Timestamp(datetime.combine(yesterday, time(23, 30)))
     
     params_raw = load_params(CONFIG_PATH)
-    actual = pd.read_parquet(ACTUAL_DEMAND_PATH) # 2024年2月～前月まで
-    print("actual: ", actual)
+    actual_past = pd.read_parquet(ACTUAL_PAST_DEMAND_PATH) # 2024年2月～前月まで
+    print("actual: ", actual_past)
 
     demand = pd.read_parquet(DEMAND_PATH) # 予測値が入っている
     demand.set_index("timestamp", inplace=True)
     print("demand: ", demand)
     
-    ytd_out = pd.read_parquet(DEMAND_PATH)
-    print("ytd_out: ", ytd_out)
-    
-    # 前日から引き継いだ残量
-    prev_soc_row = ytd_out.loc[ytd_out["timestamp"] == yesterday_2330]
-    
-    params_today = apply_pmax_from_actuals(params_raw, actual, demand, today)
-
-    if not prev_soc_row.empty:
-        row = prev_soc_row.iloc[0]
-        if "battery_soc" in row:
-            params_today["battery"]["E0"] = float(row["battery_soc"])
-        if "pstorage_soc" in row:
-            params_today["pstorage"]["E0"] = float(row["pstorage_soc"])
+    params_today = apply_pmax_from_actuals(params_raw, actual_past, demand, today)
             
     print("params_today: ", params_today)
     save_params(params_today, CONFIG_RESOLVED_PATH)
@@ -544,8 +534,8 @@ def optimize_dispatch():
     long_conf = cap_conf.get("long_term", {})
     short_conf = cap_conf.get("short_term", {})
 
-    pv_series = _history_series(actual, demand, "pv", today=today, clip_positive=True)
-    wind_series = _history_series(actual, demand, "wind", today=today, clip_positive=True)
+    pv_series = _history_series(actual_past, demand, "pv", today=today, clip_positive=True)
+    wind_series = _history_series(actual_past, demand, "wind", today=today, clip_positive=True)
 
     # fallback: params.yaml の暫定値を使う
     pv_cap_fallback = float(params_raw.get("pv_cap_mw_init", 4000.0))
@@ -584,6 +574,8 @@ def optimize_dispatch():
         pv_cap_mw=pv_cap_today,
         wind_cap_mw=wind_cap_today,
         )
+    pv_wind["pv_avail_MW"] = pv_wind["pv_avail_MW"].clip(lower=0.0)
+    pv_wind["wind_avail_MW"] = pv_wind["wind_avail_MW"].clip(lower=0.0)
     fuels_row = fuel_df.iloc[0]  # 1日1行想定
     costs = build_costs(params_today, fuels_row)
 
@@ -593,13 +585,14 @@ def optimize_dispatch():
     # prev_row = demand.loc[[yesterday_2330]]
 
     # 前日から引き継ぐ最適化結果
+    init_state = None
     if DISPATCH_HISTORY_PATH.exists():
         dispatch_hist = pd.read_parquet(DISPATCH_HISTORY_PATH)
         dispatch_hist["timestamp"] = pd.to_datetime(dispatch_hist["timestamp"])
         prev_row = dispatch_hist.loc[dispatch_hist["timestamp"] == yesterday_2330]
     else:
         prev_row = pd.DataFrame()
-
+    print("prev_row: ", prev_row)
     if not prev_row.empty:
         row = prev_row.iloc[0]
 
@@ -617,20 +610,38 @@ def optimize_dispatch():
             "biomass": float(row["biomass"]),
             "misc": float(row["misc"]),
         }
-    else:
-        init_state = None
-        
-    init_state = {
-        "hy":   float(prev_row["hydro"]),
-        "coal": float(prev_row["coal"]),
-        "oil":  float(prev_row["oil"]),
-        "lng":  float(prev_row["lng"]),
-        "th_other":  float(prev_row["th_other"]),
-        "biomass":  float(prev_row["biomass"]),
-        "misc":  float(prev_row["misc"]),
-    }
-    
-    df_ts = pd.merge(pv_wind, demand, how="left", left_on="timestamp", right_index=True)
+    # 昨日の予測結果がない場合: fetch_demand.pyで保存した昨日までの実績
+    if init_state is None and ACTUAL_PATH.exists():
+        actual_df = pd.read_parquet(ACTUAL_PATH)
+        actual_df["timestamp"] = pd.to_datetime(actual_df["timestamp"])
+        prev_row = actual_df.loc[actual_df["timestamp"] == yesterday_2330]
+
+        if not prev_row.empty:
+            row = prev_row.iloc[0]
+            init_state = {
+                "hy": float(row["hydro"]),
+                "coal": float(row["coal"]),
+                "oil": float(row["oil"]),
+                "lng": float(row["lng"]),
+                "th_other": float(row["th_other"]),
+                "biomass": float(row["biomass"]),
+                "misc": float(row["misc"]),
+            }
+    if init_state is None:
+        init_state = {
+            "hy": 500.0,
+            "coal": 3000.0,
+            "oil": 0.0,
+            "lng": 12000.0,
+            "th_other": 500.0,
+            "biomass": 300.0,
+            "misc": 200.0,
+        }
+    print("init_state: ", init_state)
+    print(df_ts[["timestamp", "predicted_demand", "pv_avail_MW", "wind_avail_MW"]].head(48))
+    print(df_ts[["predicted_demand", "pv_avail_MW", "wind_avail_MW"]].isna().sum())
+    print("min predicted_demand:", df_ts["predicted_demand"].min())
+    print("max predicted_demand:", df_ts["predicted_demand"].max())
     # print("df_ts: \n", df_ts)
     out = solve_dispatch(df_ts, costs, params_today, init_state)
     
@@ -675,15 +686,7 @@ def optimize_dispatch():
         (hist["timestamp"] < y_end)
     ].copy()
 
-    actual_df = pd.read_parquet(DEMAND_PATH)
-    actual_df["timestamp"] = pd.to_datetime(actual_df["timestamp"])
-
-    actual_yesterday = actual_df[
-        (actual_df["timestamp"] >= y_start) &
-        (actual_df["timestamp"] < y_end)
-    ].copy()
-
-    actual_df = pd.read_parquet(DEMAND_PATH)
+    actual_df = pd.read_parquet(ACTUAL_PATH)
     actual_df["timestamp"] = pd.to_datetime(actual_df["timestamp"])
 
     actual_yesterday = actual_df[
@@ -691,14 +694,14 @@ def optimize_dispatch():
         (actual_df["timestamp"] < y_end)
     ].copy()
     
-    actual_yesterday = actual_yesterday.rename(columns={
+    actual_yesterday.rename(columns={
         "pstorage": "pstorage_gen",
         "battery": "battery_dis",
         "tie": "import",
         "pv_curtailed": "curtail_pv",
         "wind_curtailed": "curtail_wind",
         "realized_demand": "demand_actual",
-    })
+    }, inplace=True)
     print("actual_yesterday: ", actual_yesterday.head())
 
     compare_cols = [
