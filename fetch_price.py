@@ -10,13 +10,18 @@ CACHE_DIR = Path("data/cache")
 RAW_DIR = Path("data/raw")
 DEBUG_DIR = Path("data/debug")
 
-RAW_OUT  = RAW_DIR / "spot_tokyo_year.csv"
+RAW_OUT_CURRENT = RAW_DIR / "spot_tokyo_current.csv"
+RAW_OUT_PREV = RAW_DIR / "spot_tokyo_prev.csv"
 PROC_OUT = CACHE_DIR / "spot_tokyo_bf1w_tdy.parquet"
 
 URL = "https://www.jepx.jp/electricpower/market-data/spot/"
 
 def today_jst_date():
     return datetime.now(JST).date()
+
+def get_fiscal_year(date):
+    """日付から年度（4月始まり）を返す"""
+    return date.year if date.month >= 4 else date.year - 1
 
 def click_today_cell_only(page):
     """
@@ -56,7 +61,59 @@ def click_today_cell_only(page):
             "日セルをクリックできませんでした。debug: debug/calendar_page.png / calendar_panel.png / trace.zip"
         ) from e
 
+def download_spot_csv(page, modal, fiscal_year, save_path, is_current=True):
+    """
+    指定された年度を選択してダウンロードする
+    今年度(is_current=True)の場合はプルダウン操作をスキップ
+    """
+    if not is_current:
+        print(f"Switching to previous year: {fiscal_year}年度")
+        # プルダウン（select要素）を探して、テキストまたは値で選択
+        try:
+            # 1. select要素がある場合
+            modal.locator("select").select_option(label=f"{fiscal_year}年度")
+        except:
+            # 2. select要素ではなく、クリックしてリストが出るタイプの場合
+            modal.locator(".ui-selectmenu-button").click() # プルダウン本体をクリック
+            page.get_by_role("option", name=f"{fiscal_year}年度").click()
+    
+    print(f"Downloading data for FY{fiscal_year}")
+    
+    with page.expect_download(timeout=120_000) as dlinfo:
+        # 「データダウンロード」ボタンをクリック
+        modal.get_by_role("button", name="データダウンロード").click()
+        
+    download = dlinfo.value
+    download.save_as(save_path)
+    print(f"[OK] saved: {save_path}")
+
+def process_csv(file_path):
+    """CSVを読み込んで共通フォーマットに整形する"""
+    if not os.path.exists(file_path):
+        return None
+    df = pd.read_csv(filepath_or_buffer=file_path, encoding="cp932")
+    
+    col_date = next(c for c in df.columns if "受渡日" in c)
+    col_time = next(c for c in df.columns if "時刻コード" in c or "時間帯" in c)
+    col_qty  = next(c for c in df.columns if "約定総量" in c)
+    col_offer = next(c for c in df.columns if "売り入札量" in c)
+    col_bid  = next(c for c in df.columns if "買い入札量" in c)
+    col_tokyo= next(c for c in df.columns if "エリアプライス東京" in c or ("東京" in c and "プライス" in c))
+
+    out = df.loc[:, [col_date, col_time, col_offer, col_bid, col_qty, col_tokyo]].copy()
+    out.columns = ["date", "period", "offer_volume", "bid_volume", "traded_volume", "tokyo_price_jpy_per_kwh"]
+    out["date"] = pd.to_datetime(out["date"])
+    return out
+
 def fetch_price():
+
+    today = today_jst_date()
+    seven_days_ago = today - timedelta(days=7)
+    
+    curr_fy = get_fiscal_year(today)
+    prev_fy = get_fiscal_year(seven_days_ago)
+    
+    needs_prev_year = (curr_fy != prev_fy)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -77,52 +134,44 @@ def fetch_price():
         modal = page.locator("#modal-box--spot_summary")
         modal.wait_for(state="visible", timeout=10_000)
 
-        # モーダル内の “実行ボタン” をクリックして download を待つ（これでCSVが落ちる）
-        with page.expect_download(timeout=120_000) as dlinfo:
-            modal.locator('button.dl-button[type="submit"]').click()
-        download = dlinfo.value
-        download.save_as(RAW_OUT)
-        print(f"[OK] saved: {RAW_OUT}")
-        
-        # 成功トレースも見たいときは保存
-        page.context.tracing.stop(path=os.path.join(DEBUG_DIR, "trace_success.zip"))
+        # 1. 今年度の分をダウンロード（プルダウン操作なし）
+        download_spot_csv(page, modal, curr_fy, RAW_OUT_CURRENT, is_current=True)
 
-    df = None
-    df = pd.read_csv(filepath_or_buffer=RAW_OUT, encoding="cp932")
+        # 2. 年度跨ぎがある場合、前年度分もダウンロード（プルダウン操作あり）
+        if needs_prev_year:
+            # モーダルが一度閉じることが多いため、再表示を確認
+            if not modal.is_visible():
+                page.locator('#filter-section--type button.dl-button[data-dl="spot_summary"]').click()
+                modal.wait_for(state="visible")
+            
+            download_spot_csv(page, modal, prev_fy, RAW_OUT_PREV, is_current=False)
 
-    # 列名
-    col_date = next(c for c in df.columns if "受渡日" in c)
-    col_time = next(c for c in df.columns if "時刻コード" in c or "時間帯" in c)
-    col_qty  = next(c for c in df.columns if "約定総量" in c)
-    col_offer  = next(c for c in df.columns if "売り入札量" in c)
-    col_bid  = next(c for c in df.columns if "買い入札量" in c)
-    col_tokyo= next(c for c in df.columns if "エリアプライス東京" in c or ("東京" in c and "プライス" in c))
+        browser.close()
 
-    out = df.loc[:, [col_date, col_time, col_offer, col_bid, col_qty, col_tokyo]].copy()
-    out.columns = ["date", "period", "offer_volume", "bid_volume", "traded_volume", "tokyo_price_jpy_per_kwh"]
-    out["date"] = pd.to_datetime(out["date"])
-
-    # 過去1週間分だけ切り出して保存
-    today = pd.Timestamp(datetime.now(JST).date())
-    before_1w = today - timedelta(days=7)
-    end_inclusive = today + pd.Timedelta(hours=23, minutes=30)
-    print(f"[FILTER] {before_1w} to {end_inclusive}")
+    # データ結合処理
+    df_curr = process_csv(RAW_OUT_CURRENT)
+    df_prev = process_csv(RAW_OUT_PREV) if needs_prev_year else None
     
-    final_out = out.sort_values(["date", "period"]).reset_index(drop=True)
-    final_out.rename(columns={"date": "timestamp"}, inplace=True)
-    final_out["timestamp"] = (
-        final_out["timestamp"]
-        + (final_out["period"] - 1).apply(lambda k: pd.Timedelta(minutes=30 * k))
+    combined_df = pd.concat([df_prev, df_curr], ignore_index=True) if df_prev is not None else df_curr
+
+    # 時系列処理
+    combined_df["timestamp"] = (
+        combined_df["date"] + (combined_df["period"] - 1).apply(lambda k: pd.Timedelta(minutes=30 * k))
     )
-    final_out.drop(columns="period", inplace=True)
-    print("ダウンロード結果: \n", final_out)
+    combined_df.drop(columns=["period", "date"], inplace=True)
+    combined_df = combined_df.sort_values("timestamp").reset_index(drop=True)
 
-    final_out = final_out[final_out["timestamp"].between(before_1w, end_inclusive, inclusive="both")]
-    final_out.reset_index(drop=True, inplace=True)
-    print("final_outを一週間前から今日までにする: \n", final_out)
+    # フィルタリング
+    filter_start = pd.Timestamp(seven_days_ago).tz_localize(None)
+    filter_end = pd.Timestamp(today).tz_localize(None) + pd.Timedelta(hours=23, minutes=30)
     
+    final_out = combined_df[combined_df["timestamp"].between(filter_start, filter_end)]
+    final_out.reset_index(drop=True, inplace=True)
+    print("final_out: \n", final_out)
+    # 保存
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     final_out.to_parquet(PROC_OUT, index=False)
-    print(f"[OK] wrote filtered parquet (clean): {PROC_OUT}  rows={len(final_out)}")
+    print(f"[OK] Final data saved to {PROC_OUT}. Rows: {len(final_out)}")
 
 if __name__ == "__main__":
     fetch_price()
