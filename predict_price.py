@@ -355,7 +355,8 @@ def predict_price():
         hist = pd.read_parquet(PRICE_HISTORY_PATH)
     else:
         hist = pd.DataFrame()
-
+    unique_dates = hist["timestamp"].dt.date.unique()
+    print(sorted(unique_dates))
     hist = pd.concat([hist, pred_tmw_only], axis=0, ignore_index=True)
     
     hist = hist.drop_duplicates(
@@ -364,18 +365,18 @@ def predict_price():
     ).sort_values(["forecast_date", "timestamp"])
     hist.to_parquet(PRICE_HISTORY_PATH, index=False)
     print(f"[SAVE] price history: {tmw_start} {PRICE_HISTORY_PATH}")
+    
     history = pd.read_parquet(PRICE_HISTORY_PATH)
-
     eval_df = history.merge(
         price[["timestamp", "tokyo_price_jpy_per_kwh"]],
         on="timestamp",
-        how="inner"
+        how="outer"
     ).copy()
     eval_df["forecast_date"] = pd.to_datetime(eval_df["forecast_date"])
     cutoff = pd.to_datetime(today - timedelta(days=7))
 
     eval_df = eval_df[eval_df["forecast_date"] >= cutoff].copy()
-    print("確認: ", eval_df)
+    print("確認: \n", eval_df)
     eval_df["crps"] = eval_df.apply(row_crps, axis=1)
     eval_df["timestamp_30min"] = eval_df["timestamp"].dt.strftime("%H:%M")
     eval_df.to_parquet(PRICE_EVAL_DETAIl_PATH, index=False)
@@ -386,13 +387,19 @@ def predict_price():
         .mean()
         .reset_index()
     )
-    
-    # 需給実績をくっつけて可視化で使用する(timestamp, predicted_demand, price_realized)    
-    out = pred_df.merge(
+
+    combined_forecast = pd.concat([history, pred_df], axis=0, ignore_index=True)
+    combined_forecast = combined_forecast.sort_values(["timestamp", "forecast_date"]).drop_duplicates(
+        subset=["timestamp"], keep="last"
+    )
+    display_start = pd.Timestamp(today - timedelta(days=7))
+    display_forecast = combined_forecast[combined_forecast["timestamp"] >= display_start].copy()
+    out = display_forecast.merge(
         price[["timestamp", "tokyo_price_jpy_per_kwh"]],
         on="timestamp",
-        how="outer"
+        how="outer" # 実績しかない過去分も、予測しかない未来分も両方残す
     )
+
     print("final_out:\n", out)
     print("final_eval:\n", crps_30min)
     
