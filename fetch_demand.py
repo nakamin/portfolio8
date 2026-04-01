@@ -131,6 +131,7 @@ def fetch_demand():
             print(f"Searching for YM: {ym}")
             csv_urls = _get_month_csv_url(session=s, target_ym=ym)
             
+            # 当月分のcsvがある
             if csv_urls:
                 print(f"Fetching: {csv_urls[0]}")
                 response = s.get(csv_urls[0], timeout=30)
@@ -151,6 +152,7 @@ def fetch_demand():
                 print(f"[WARNING] CSV for {ym} not found. Generating fallback data from 7 days ago.")
                 last_df = dfs[-1]
                 fallback_df = last_df.tail(48 * 7).copy()
+                fallback_df.index = pd.to_datetime(fallback_df.index)
                 fallback_df.index = fallback_df.index + timedelta(days=7)
                 
                 yesterday_2330 = (datetime.now() - timedelta(days=1)).replace(
