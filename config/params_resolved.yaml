@@ -65,7 +65,7 @@ capacity:
     misc: 333.90000000000003
     pstorage: 3743.25
     battery: 44.59350000000003
-    tie: 4457.25
+    tie: 4030.9500000000003
 hydro:
   P_max: 2246.0
   RU: 150
@@ -103,7 +103,7 @@ thermal:
     RD: 100
     c: 9000
 tie:
-  cap: 4457.0
+  cap: 4031.0
   c_import: 13000
 battery:
   E_max: 2000
