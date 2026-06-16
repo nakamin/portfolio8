@@ -9,7 +9,7 @@ import os
 
 JST = timezone(timedelta(hours=9))
 
-PAGE_URL = "https://www.tepco.co.jp/forecast/html/area_jukyu-j.html"
+PAGE_URL = "https://www.tepco.co.jp/forecast/html/eria_jukyu-j.html"
 DATA_DIR = Path("data")
 CACHE_DIR = Path("data/cache")
 DEBUG_DIR = Path("data/dubug")
@@ -35,8 +35,17 @@ CSV_LINK_RE = re.compile(
     r"""href=['"]([^'"]*eria_jukyu_(\d{6})_\d{2}\.csv)['"]""",
     re.IGNORECASE,
 )
-
 def _get_month_csv_urls(session: requests.Session, target_ym: str) -> list[str]:
+    """
+    命名規則から直接URLを生成
+    """
+    base_url = "https://www.tepco.co.jp/forecast/html/images/" # 実際のベースURL
+    direct_url = f"{base_url}eria_jukyu_{target_ym}_03.csv"
+    
+    log(f"[csv-link] Generated direct URL: {direct_url}")
+    return [direct_url]
+
+def _get_month_csv_urls_html(session: requests.Session, target_ym: str) -> list[str]:
     """
     東京電力ページから target_ym に一致するCSVリンクを取得する
     Actionsで失敗したときに原因を追えるよう、HTMLの状態もログ出力
@@ -57,7 +66,7 @@ def _get_month_csv_urls(session: requests.Session, target_ym: str) -> list[str]:
     html = response.text
 
     # Actions上でだけ失敗する場合の調査用
-    debug_html_path = DEBUG_DIR / "debug_tepco_area_jukyu.html"
+    debug_html_path = DEBUG_DIR / "debug_tepco_eria_jukyu.html"
     debug_html_path.write_text(html, encoding="utf-8", errors="replace")
     log(f"[page] debug html saved: {debug_html_path}")
 
@@ -161,12 +170,18 @@ def fetch_demand():
     is_early_month = today.day <= 7
     is_update_day = today.day == 8
 
-
     # 取得候補のリスト（1-7日なら [前月, 当月]、8日以降なら [当月]）
     target_yms = [last_month_ym, this_month_ym] if is_early_month else [this_month_ym]
     
     dfs = []
     with requests.Session() as s:
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            "Cache-Control": "max-age=0",
+        })
+        
         for ym in target_yms:
             print(f"Searching for YM: {ym}")
             csv_urls = _get_month_csv_urls(session=s, target_ym=ym)
@@ -192,15 +207,15 @@ def fetch_demand():
                 print(f"[WARNING] CSV for {ym} not found. Generating fallback data from 7 days ago.")
                 last_df = dfs[-1]
                 fallback_df = last_df.tail(48 * 7).copy()
-                fallback_df.index = pd.to_datetime(fallback_df.index)
-                fallback_df.index = fallback_df.index + timedelta(days=7)
+                fallback_df["timestamp"] = pd.to_datetime(fallback_df["timestamp"])
+                fallback_df["timestamp"] = fallback_df["timestamp"] + timedelta(days=7)
                 
-                yesterday_2330 = (datetime.now() - timedelta(days=1)).replace(
+                yesterday_2330 = (datetime.now(JST) - timedelta(days=1)).replace(
                     hour=23, minute=30, second=0, microsecond=0
-                ) # 前日の23:30を指定
+                ) # 前日の23:30を指定(JST明示)
                 
-                # 前日の23:30以前のデータのみを抽出
-                fallback_df = fallback_df[fallback_df.index <= yesterday_2330]
+                # 【修正】基準をtimestampカラムに変更
+                fallback_df = fallback_df[fallback_df["timestamp"] <= yesterday_2330]
                 
                 dfs.append(fallback_df)
                 print(f"Generated {len(fallback_df)} rows of fallback data.")
@@ -211,7 +226,7 @@ def fetch_demand():
         # 8日に当月分しかリストにない場合、前月分を別途取得してキャッシュ更新
         if is_update_day and len(dfs) > 0 and not any(d['timestamp'].dt.strftime('%Y%m').iloc[0] == last_month_ym for d in dfs if not d.empty):
             # 8日はtarget_ymsが[this_month]のみになるため、ここで前月分を処理
-            prev_urls = _get_month_csv_url(session=s, target_ym=last_month_ym)
+            prev_urls = _get_month_csv_urls(session=s, target_ym=last_month_ym)
             if prev_urls:
                 resp = s.get(prev_urls[0], timeout=30)
                 prev_content = resp.content.decode("MacRoman")
@@ -244,8 +259,8 @@ def fetch_demand():
         hist_start = last_date - timedelta(days=6)
     
         hist = df[
-        (df["timestamp"].dt.date >= hist_start) &
-        (df["timestamp"].dt.date <= last_date)
+            (df["timestamp"].dt.date >= hist_start) &
+            (df["timestamp"].dt.date <= last_date)
         ].copy()
         
         if hist.empty:
@@ -258,12 +273,10 @@ def fetch_demand():
         
         hist["timestamp"] = hist["timestamp"] + pd.Timedelta(days=offset_days) # 各datetimeにoffset_daysぶんを足す処理
 
-        # 目的の期間だけに絞り直す
         prev = hist[
             (hist["timestamp"].dt.date >= before_1w) &
             (hist["timestamp"].dt.date <= yesterday)
-        ].copy()
-        prev = hist.reset_index(drop=True)
+        ].copy().reset_index(drop=True)
 
     print("final_out: \n", prev)
 
