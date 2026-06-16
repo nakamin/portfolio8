@@ -31,10 +31,6 @@ def log(msg: str, level: str = "INFO"):
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S%z")
     print(f"[{level}] {now} | {msg}", flush=True)
 
-CSV_LINK_RE = re.compile(
-    r"""href=['"]([^'"]*eria_jukyu_(\d{6})_\d{2}\.csv)['"]""",
-    re.IGNORECASE,
-)
 def _get_month_csv_urls(session: requests.Session, target_ym: str) -> list[str]:
     """
     命名規則から直接URLを生成
@@ -45,55 +41,6 @@ def _get_month_csv_urls(session: requests.Session, target_ym: str) -> list[str]:
     log(f"[csv-link] Generated direct URL: {direct_url}")
     return [direct_url]
 
-def _get_month_csv_urls_html(session: requests.Session, target_ym: str) -> list[str]:
-    """
-    東京電力ページから target_ym に一致するCSVリンクを取得する
-    Actionsで失敗したときに原因を追えるよう、HTMLの状態もログ出力
-    """
-
-    log(f"[page] GET {PAGE_URL}")
-    response = session.get(PAGE_URL, timeout=30)
-
-    log(
-        f"[page] status={response.status_code}, "
-        f"content_type={response.headers.get('Content-Type')}, "
-        f"bytes={len(response.content)}, "
-        f"final_url={response.url}"
-    )
-
-    response.raise_for_status()
-    response.encoding = response.apparent_encoding or "utf-8"
-    html = response.text
-
-    # Actions上でだけ失敗する場合の調査用
-    debug_html_path = DEBUG_DIR / "debug_tepco_eria_jukyu.html"
-    debug_html_path.write_text(html, encoding="utf-8", errors="replace")
-    log(f"[page] debug html saved: {debug_html_path}")
-
-    html_hash = hashlib.md5(html.encode("utf-8", errors="ignore")).hexdigest()
-    log(f"[page] html_md5={html_hash}")
-    log(f"[page] html_head={html[:300].replace(chr(10), ' ')[:300]}")
-
-    matches = CSV_LINK_RE.findall(html)
-
-    # matches は [(href, yyyymm), ...]
-    all_links = [href for href, ym in matches]
-    filtered_links = [href for href, ym in matches if ym == target_ym]
-
-    log(f"[csv-link] all_csv_count={len(all_links)}")
-    log(f"[csv-link] all_csv_sample={all_links[:5]}")
-    log(f"[csv-link] target_ym={target_ym}, matched_count={len(filtered_links)}")
-    log(f"[csv-link] matched={filtered_links}")
-
-    def complete_url(link: str) -> str:
-        return urljoin(PAGE_URL, link)
-
-    urls = [complete_url(link) for link in filtered_links]
-
-    # 念のため重複排除
-    urls = sorted(set(urls))
-
-    return urls
 
 def read_demand_csv(content: str) -> pd.DataFrame:
     # 1行目を読み込んで、混在しているか確認
