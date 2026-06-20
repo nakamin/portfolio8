@@ -70,6 +70,7 @@ def show_hero():
                 st.image(str(hero_path))
 
 @st.cache_data(show_spinner=False)
+
 def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | None:
     """
     name: 'demand_forecast' のようなベース名
@@ -89,30 +90,63 @@ def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | No
         st.error(f"{name}.parquet を読み込めませんでした: {e}")
         return None
 
-def load_metadata() -> dict:
+# def load_metadata() -> dict:
+#     """
+#     メタ情報（sources, last_updated など）を取得
+#     - local 環境: data/cache/metadata.json を読む
+#     - hf 環境: GitHub raw の data/cache/metadata.json を読む
+#     """
+#     if RUN_ENV == "hf":
+#         rel_path = "data/cache/metadata.json"
+#         url = f"{GITHUB_RAW_BASE}/{rel_path}"
+#         resp = requests.get(url)
+#         if resp.status_code != 200:
+#             # 初回など、まだ metadata.json が無いとき
+#             return {}
+#         try:
+#             return resp.json()
+#         except ValueError:
+#             # 念のため、JSONとして読めないときは空にする
+#             return {}
+#     else:
+#         path = CACHE_DIR / "metadata.json"
+#         if not path.exists():
+#             return {}
+#         return json.loads(path.read_text(encoding="utf-8"))
+
+def load_json(file_path_str: str) -> dict:
     """
-    メタ情報（sources, last_updated など）を取得
-    - local 環境: data/cache/metadata.json を読む
-    - hf 環境: GitHub raw の data/cache/metadata.json を読む
+    任意のJSONファイル（メタデータやサマリー）を環境に応じて取得する
+    - file_path_str: "data/cache/jepx_outages_summary.json" のような相対パス文字列
     """
     if RUN_ENV == "hf":
-        rel_path = "data/cache/metadata.json"
-        url = f"{GITHUB_RAW_BASE}/{rel_path}"
-        resp = requests.get(url)
-        if resp.status_code != 200:
-            # 初回など、まだ metadata.json が無いとき
+        # Hugging Face環境: パス文字列をそのままGitHub RawのURLに結合
+        url = f"{GITHUB_RAW_BASE}/{file_path_str}"
+        try:
+            resp = requests.get(url, timeout=5) # 念のためタイムアウトを設定
+            if resp.status_code != 200:
+                print(f"[WARN] JSON not found on GitHub Raw: {url} (HTTP {resp.status_code})")
+                return {}
+            return resp.json()
+        except (requests.RequestException, ValueError) as e:
+            # 通信エラーやJSONとして読めない場合のセーフティネット
+            print(f"[ERROR] Failed to load JSON from GitHub Raw: {e}")
+            return {}
+            
+    else:
+        # ローカル環境: 文字列からPathオブジェクトを生成して読み込み
+        path = Path(file_path_str)
+        if not path.exists():
+            print(f"[WARN] JSON file does not exist locally: {path}")
             return {}
         try:
-            return resp.json()
-        except ValueError:
-            # 念のため、JSONとして読めないときは空にする
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[ERROR] Failed to read local JSON file: {e}")
             return {}
-    else:
-        path = CACHE_DIR / "metadata.json"
-        if not path.exists():
-            return {}
-        return json.loads(path.read_text(encoding="utf-8"))
-
+        
+def load_metadata() -> dict:
+    return load_json("data/cache/metadata.json")
 
 def jst_now_floor_30min() -> datetime:
     """現在時刻をJSTで30分刻みに丸める"""
@@ -299,6 +333,103 @@ def main():
         fig_balance = plot_energy_mix(dispatch_display, dispatch_error, now_floor)
         st.plotly_chart(fig_balance, use_container_width=True)
 
+        st.markdown("---")
+        
+        # ========================
+        # セクション4: リスク情報
+        # ========================
+        st.subheader("4. リスク情報")
+        
+        # 今日を含めない過去7日前（開始日）を計算
+        start_date = today - timedelta(days=7)
+        end_date = today + timedelta(days=6)
+
+        # 表示用に見やすくフォーマット（例: 2026/06/13）
+        start_str = start_date.strftime("%Y/%m/%d")
+        end_str = end_date.strftime("%Y/%m/%d")
+        today_str = today.strftime("%Y/%m/%d")
+        tab_supply, tab_demand = st.tabs(["4.1 供給側リスク (JEPX)", "4.2 送配電・需要家側リスク (東電PG)"])
+
+        # ----- 4.1 供給側リスク (JEPX) -----
+        with tab_supply:
+            st.markdown("#### 4.1 供給側リスク")
+            st.caption("JEPX 発電設備の停止・出力低下情報")
+
+            summary = load_json("data/cache/jepx_outages_summary.json")
+            df_jepx = load_parquet("jepx_outages_latest")
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("停止・出力低下件数", summary.get("n_records", "-"))
+
+            total_mw = summary.get("total_decrease_mw")
+            col2.metric(
+                "合計低下量",
+                f"{total_mw:,.0f} MW" if total_mw is not None else "-"
+            )
+
+            col3.metric("計画外停止件数", summary.get("unplanned_count", "-"))
+            col4.metric("復旧未定件数", summary.get("unknown_recovery_count", "-"))
+
+            # st.caption(f"最終更新時刻 (JST): {summary.get('updated_at', '-')}")
+
+            st.markdown(
+                """
+                発電設備の停止・出力低下は、供給余力やJEPX価格に影響する可能性があります。
+                ここでは、価格予測やエネルギーミックス最適化の結果を解釈するための参考情報として表示しています。
+                """
+            )
+            
+            if df_jepx is not None and not df_jepx.empty:
+                show_cols = [
+                    c for c in [
+                        "エリア", "発電所名", "発電形式", "停止区分", "種別", 
+                        "低下量", "停止日時", "復旧見通し", "復旧予定日", 
+                        "停止原因", "最終更新日時"
+                    ] if c in df_jepx.columns
+                ]
+                st.success(f" 集計期間: {start_str} 〜 {end_str}")
+                st.dataframe(df_jepx[show_cols], use_container_width=True)
+            else:
+                st.toast("詳細データが見つかりませんでした。")
+            st.link_button("JEPX 停止情報一覧を開く", "https://hjks.jepx.or.jp/hjks/outages")
+
+
+        # ----- 4.2 送配電・需要家側リスク (PG) -----
+        with tab_demand:
+            st.markdown("#### 4.2 送配電・需要家側リスク")
+            st.caption("東京電力パワーグリッド 停電情報・過去履歴")
+            try:
+                df_pg = load_parquet("pg_outages_past_week")
+            except Exception:
+                df_pg = None
+
+            st.markdown(
+                """
+                停電情報は、需要予測や価格予測の直接の入力データではありませんが、
+                送配電設備の状態や需要家への影響を把握するための参考情報として表示します。
+                """
+            )
+
+            # メッセージの作成
+            period_text = f"（対象期間: {start_str} 〜 {today_str}）"
+            if df_pg is not None and not df_pg.empty:
+                st.success(f"総レコード数: {len(df_pg)} 件 {period_text}")
+                st.dataframe(df_pg, use_container_width=True)
+            else:
+                st.info("現在、表示できる直近の停電履歴キャッシュはありません。公式のリアルタイム情報をご確認ください。")
+
+            # 公式ページへのリンクボタンエリア
+            col1, col2 = st.columns(2)
+            with col1:
+                st.link_button(
+                    "🔗 東電PG リアルタイム停電情報",
+                    "https://teideninfo.tepco.co.jp/",
+                )
+            with col2:
+                st.link_button(
+                    "🔗 停電履歴検索（公式ページ）",
+                    "https://teideninfo.tepco.co.jp/day/teiden/index-j.html",
+                )
 
     with tab_model:
         meta = load_metadata()

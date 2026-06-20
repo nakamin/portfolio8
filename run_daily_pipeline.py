@@ -13,6 +13,8 @@ from fetch_demand import fetch_demand
 from predict_demand import predict_demand
 from predict_price import predict_price
 from optimize_dispatch import optimize_dispatch
+from fetch_jepx_outages import fetch_jepx_outages
+from fetch_pg_outages import fetch_pg_outages
 
 CACHE_DIR = Path("data/cache")
 
@@ -28,6 +30,11 @@ def main():
     fetch_price()
     print("\n===== demand =====\n")
     fetch_demand()
+    
+    print("\n===== jepx outage==\n")
+    fetch_jepx_outages()
+    print("\n===== pg outage =====\n")
+    fetch_pg_outages()
 
     # ========== 2. 需要予測 ==========
     print("\n===== predict demand =====\n")
