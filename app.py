@@ -90,30 +90,6 @@ def load_parquet(name: str, version_key: str | None = None) -> pd.DataFrame | No
         st.error(f"{name}.parquet を読み込めませんでした: {e}")
         return None
 
-# def load_metadata() -> dict:
-#     """
-#     メタ情報（sources, last_updated など）を取得
-#     - local 環境: data/cache/metadata.json を読む
-#     - hf 環境: GitHub raw の data/cache/metadata.json を読む
-#     """
-#     if RUN_ENV == "hf":
-#         rel_path = "data/cache/metadata.json"
-#         url = f"{GITHUB_RAW_BASE}/{rel_path}"
-#         resp = requests.get(url)
-#         if resp.status_code != 200:
-#             # 初回など、まだ metadata.json が無いとき
-#             return {}
-#         try:
-#             return resp.json()
-#         except ValueError:
-#             # 念のため、JSONとして読めないときは空にする
-#             return {}
-#     else:
-#         path = CACHE_DIR / "metadata.json"
-#         if not path.exists():
-#             return {}
-#         return json.loads(path.read_text(encoding="utf-8"))
-
 def load_json(file_path_str: str) -> dict:
     """
     任意のJSONファイル（メタデータやサマリー）を環境に応じて取得する
@@ -264,14 +240,14 @@ def main():
     show_hero()
 
     now_jst = datetime.now(JST)
-    st.caption(f"現在時刻（JST）: {now_jst.strftime('%Y-%m-%d %H:%M')}")
+    st.caption(f"現在時刻 : {now_jst.strftime('%Y-%m-%d %H:%M')}")
 
     meta = load_metadata()
     if meta.get("last_updated_jst"):
         last_jst = datetime.fromisoformat(meta["last_updated_jst"])
-        st.caption(f"データ更新時刻: {last_jst.strftime('%Y-%m-%d %H:%M')}（自動更新日時）")
+        st.caption(f"データ更新時刻 : {last_jst.strftime('%Y-%m-%d %H:%M')}")
     else:
-        st.caption("データ更新時刻: 不明")
+        st.caption("データ更新時刻 : 不明")
     st.caption(
         "モデル設計、特徴量エンジニアリング、分析の詳細は "
         "[Qiita記事](https://qiita.com/nakamin/items/379b890ee07167d9cf36) "
@@ -340,7 +316,7 @@ def main():
             """
             【上段】予測された電力需要を満たしつつ、発電コストが最も安くなるような「最適な電源構成（太陽光、火力、蓄電池など）」の組み合わせを時間帯別にシミュレーションした結果です。
             昨日分と今日分の2日間を表示しており、今日分については、[🔗 東電PG でんき予報 エリア需給実績データ / 当日](https://www.tepco.co.jp/forecast/html/area_data-j.html) で同様に可視化されています。 \n
-            【下段】前日のシミュレーションに対して、実際の需給実績とのズレがどれくらい生じたか（ネットエラー）を表示し、計画の妥当性を評価しています。"
+            【下段】前日のシミュレーションに対して、実際の需給実績とのズレがどれくらい生じたか（ネットエラー）を表示し、計画の妥当性を評価しています。
             """
         )
 
