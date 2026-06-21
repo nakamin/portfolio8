@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from io import StringIO
 import time
+import re, json
 
 import pandas as pd
 from playwright.sync_api import sync_playwright
@@ -12,6 +13,9 @@ from playwright.sync_api import sync_playwright
 TEPCO_URL = "https://teideninfo.tepco.co.jp/day/teiden/index-j.html"
 OUT_DIR = Path("data/cache")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+PARQUET_PATH = OUT_DIR / "pg_outages_past_week.parquet"
+JSON_PATH = OUT_DIR / "pg_outages_summary.json"
 
 NEW_COLUMNS = [
     "発生・復旧日時",
@@ -27,8 +31,8 @@ NEW_COLUMNS = [
 
 def fetch_pg_outages_past_week() -> pd.DataFrame:
     """
-    Playwrightを使ってTEPCOのページから、今日を含む過去7日間（合計8日分）の停電履歴を取得。
-    すべてのデータを1つのDataFrameに結合して返す。
+    Playwrightを使って東電PGの該当ページから、今日を含む過去7日間（合計8日分）の停電履歴を取得
+    - すべてのデータを1つのDataFrameに結合して返す
     """
     all_dfs = []
     
@@ -38,10 +42,10 @@ def fetch_pg_outages_past_week() -> pd.DataFrame:
     
     date_str_list = [(today - timedelta(days=i)).strftime("%Y年%m月%d日") for i in range(8)]
     
-    print(f"[INFO] 取得対象の期間（今日を含む8日間）: {date_str_list[-1]} ~ {date_str_list[0]}")
+    print(f"[AGGREGATE] {date_str_list[-1]} ~ {date_str_list[0]}")
 
     with sync_playwright() as p:
-        # headless=True で実行。もし挙動を目で確認したい場合は False にする
+
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -55,15 +59,12 @@ def fetch_pg_outages_past_week() -> pd.DataFrame:
         page.wait_for_selector("select", timeout=15000)
         
         for date_str in date_str_list:
-            print(f"[FETCH] {date_str} のデータを取得中...")
+            print(f"[FETCH] Retrieving data for {date_str}")
             
             try:
-                # 1. 最初のセレクトボックスで日付を選択（label指定）
-                # TEPCOのページは日付を変更した瞬間に自動でJavaScriptの通信が走る（オンチェンジイベント）ケースがあります
+                # 最初のセレクトボックスで日付を選択（label指定）
                 page.locator("select").first.select_option(label=date_str)
                 
-                # 2. 【エラー対策】ボタンクリックを廃止し、データが切り替わるのを「待つ」手法へ変更
-                # 日付変更に伴う通信（ネットワークが静かになる状態）を最大5秒待つ
                 try:
                     page.wait_for_load_state("networkidle", timeout=3000)
                 except Exception:
@@ -71,7 +72,7 @@ def fetch_pg_outages_past_week() -> pd.DataFrame:
                 
                 time.sleep(1.5) # レンダリングの安全マージン
                 
-                # 3. HTMLを取得してPandasで解析
+                # HTMLを取得してPandasで解析
                 html_content = page.content()
                 tables = pd.read_html(StringIO(html_content))
                 
@@ -84,23 +85,23 @@ def fetch_pg_outages_past_week() -> pd.DataFrame:
                 
                 # 「履歴情報はありません」などの文言しかない場合はスキップ
                 if df_day.empty or (len(df_day) == 1 and "ありません" in str(df_day.iloc[0])):
-                    print(f"-> {date_str} は停電履歴なし")
+                    print(f"-> There was no record of power outages on {date_str}")
                     continue
                 
                 # どの日付のデータか判別できるように列を追加
                 df_day["target_date"] = date_str
                 all_dfs.append(df_day)
-                print(f"-> {date_str} 成功: {len(df_day)} 件のレコード")
+                print(f"-> {date_str} [SUCCESS] {len(df_day)} records")
                 
             except Exception as e:
-                print(f"[WARN] {date_str} の取得中にエラーが発生しました: {e}")
+                print(f"[WARN] {date_str} : {e}")
                 continue
 
         browser.close()
 
     # --- データの結合 (concat) ---
     if not all_dfs:
-        print("[INFO] 対象期間内に対象となる停電データは1件もありませんでした。")
+        print("[INFO] There were no relevant power outage data entries within the specified period")
         return pd.DataFrame()
         
     combined_df = pd.concat(all_dfs, ignore_index=True)
@@ -112,29 +113,21 @@ def clean_date(df):
     # データのコピーを作成
     df_clean = df.copy()
 
-    # ==========================================================
-    # 1. 「発生・復旧日時」を「発生日時」と「復旧日時」の2列に分割する
-    # ==========================================================
-    # スペースで分割すると、[発生日付, 発生時間, 復旧日付, 復旧時間] の4つに分かれるので、2つずつ結合します
+    # 「発生・復旧日時」を「発生日時」と「復旧日時」の2列に分割する
     split_dt = df_clean["発生・復旧日時"].str.split(" ", expand=True)
 
     if split_dt.shape[1] == 4:
         df_clean["発生日時"] = split_dt[0] + " " + split_dt[1]
         df_clean["復旧日時"] = split_dt[2] + " " + split_dt[3]
     else:
-        # 万が一、すでに復旧していてデータが特殊な場合のフォールバック
         df_clean["発生日時"] = df_clean["発生・復旧日時"]
         df_clean["復旧日時"] = "未復旧"
 
     # 元の結合されていた列は削除
     df_clean.drop(columns=["発生・復旧日時"], inplace=True)
 
-
-    # ==========================================================
-    # 2. すべての日時・日付カラムを「2026/06/20 09:29」表記に統一する
-    # ==========================================================
-
-    # 2-1. 【日時】フォーマットの統一（分まで表示）
+    # すべての日時・日付カラムを「2026/06/20 09:29」表記に統一する
+    # 【日時】フォーマットの統一（分まで表示）
     datetime_cols = ["発生日時", "復旧日時", "更新日時", "取得日時"]
     for col in datetime_cols:
         # 一度pandasの日時型に変換（エラーはNaTにする）
@@ -142,41 +135,117 @@ def clean_date(df):
         # 「2026/06/20 09:29」の文字列に変換
         df_clean[col] = dt_series.dt.strftime("%Y/%m/%d %H:%M")
 
-    # 2-2. 【日付】フォーマットの統一（年月日のみ）
+    # 【日付】フォーマットの統一（年月日のみ）
     # 「2026年06月20日」を「2026/06/20」に変換
     df_clean["対象日"] = pd.to_datetime(
         df_clean["対象日"].str.replace("年", "/").str.replace("月", "/").str.replace("日", ""),
         errors="coerce"
     ).dt.strftime("%Y/%m/%d")
     
-    return df
+    return df_clean
+
+def summarize_tepco_teiden(df: pd.DataFrame) -> dict:
+    now = datetime.now(ZoneInfo("Asia/Tokyo"))
+
+    summary = {
+        "source": "東京電力 停電情報",
+        "source_url": TEPCO_URL,
+        "updated_at": now.isoformat(),
+        "status": "success",
+        "n_records": int(len(df)),
+        "total_affected_houses": 0,    # 合計停電軒数（約120軒などを数値化）
+        "under_investigation_count": 0, # 原因調査中の件数
+    }
+
+    # 合計停電軒数の集計（"約1,030軒" や "約20軒" から数値を抽出して合計）
+    if "停電軒数" in df.columns:
+        def extract_houses(val):
+            if pd.isna(val):
+                return 0
+            # 文字列から数字（カンマ含む）だけを抽出
+            nums = re.findall(r'\d+', str(val).replace(',', ''))
+            return int(nums[0]) if nums else 0
+
+        summary["total_affected_houses"] = int(
+            df["停電軒数"].apply(extract_houses).sum()
+        )
+
+    # 原因調査中の件数カウント
+    if "停電理由" in df.columns:
+        summary["under_investigation_count"] = int(
+            df["停電理由"].astype(str).str.contains("調査中", na=False).sum()
+        )
+
+    return summary
 
 def fetch_pg_outages() -> None:
-    parquet_path = OUT_DIR / "pg_outages_past_week.parquet"
+    now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    display_now = now.strftime("%Y/%m/%d %H:%M")
+
     try:
         df = fetch_pg_outages_past_week()
         
         if not df.empty:
             print("---")
-            print(f"総レコード数: {len(df)} 件")
-            print(len(df.columns))
+            print(f"Total: {len(df)} records")
+            
+            # カラム名を上書きして整形
             df.columns = NEW_COLUMNS
             df = clean_date(df)
             print(df)
-            df.to_parquet(parquet_path, index=False)
-            print(f"[OK] 最新データの統合に成功し、保存しました: {parquet_path}")
+            summary = summarize_tepco_teiden(df)
+            summary["updated_at"] = display_now
+
+            # 成功したらParquetとJSONを更新（キャッシュ更新）
+            df.to_parquet(PARQUET_PATH, index=False)
+            with open(JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+
+            print(f"[OK] The latest data has been successfully integrated and saved: {PARQUET_PATH}")
+            print(summary)
         else:
-            print("[INFO] 新規データが空だったため、キャッシュは更新しません。")
+            print("[INFO] The cache will not be updated because there is no new data")
 
     except Exception as e:
         print("---")
-        print("[WARN] TEPCOデータの取得中にエラーが発生しました。")
-        print(f"詳細エラー: {e}")
+        print("[WARN] An error occurred while acquiring power outage data")
+        print(f"details: {e}")
         
-        if parquet_path.exists():
-            print(f"[FALLBACK] 既存のキャッシュファイルを利用します: {parquet_path}")
+        if PARQUET_PATH.exists():
+            print(f"[FALLBACK] Found cache file: {PARQUET_PATH}. Regenerating summary from cache.")
+            try:
+                # キャッシュからデータを読み込み、サマリーを再作成
+                df_cached = pd.read_parquet(PARQUET_PATH)
+                summary = summarize_tepco_teiden(df_cached)
+                
+                # エラーが起きたが、データ自体はキャッシュで維持できている状態を記録
+                summary["updated_at"] = display_now
+                summary["status"] = "fallback_cache"
+                summary["error_log"] = str(e)  # デバッグ用にエラー内容を記録
+                
+                with open(JSON_PATH, "w", encoding="utf-8") as f:
+                    json.dump(summary, f, ensure_ascii=False, indent=2)
+                    
+                print("[OK] TEPCO power outage summary updated using existing cache data.")
+                print(summary)
+                
+            except Exception as cache_err:
+                print(f"[CRITICAL] Failed to read from cache file: {cache_err}")
         else:
-            print("[CRITICAL] キャッシュファイルも存在しません。初回実行時に取得を失敗した可能性があります。")
+            # キャッシュすら存在しない場合
+            print("[CRITICAL] Cache file does not exist. Creating empty/failed summary.")
+            error_summary = {
+                "source": "東京電力 停電情報",
+                "source_url": TEPCO_URL,
+                "updated_at": display_now,
+                "status": "failed",
+                "error": str(e),
+                "n_records": 0
+            }
+            with open(JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(error_summary, f, ensure_ascii=False, indent=2)
+
+    print("[INFO] TEPCO power outage processing step passed.")
 
 if __name__ == "__main__":
     fetch_pg_outages()

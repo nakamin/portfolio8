@@ -282,6 +282,8 @@ def main():
 
     now_floor = jst_now_floor_30min()
     today = now_floor.date()
+    start_7d_str = (today - timedelta(days=7)).strftime("%Y/%m/%d")
+    end_6d_str = (today + timedelta(days=6)).strftime("%Y/%m/%d")
 
     tab_dashboard, tab_model, tab_pipeline, contact = st.tabs(["ダッシュボード", "モデル説明", "パイプライン説明", "お問い合わせ"])
 
@@ -291,6 +293,12 @@ def main():
         # ========================
 
         st.subheader("1. 東京エリアの電力需要予測")
+        st.caption(
+            f"""
+            【上段】7日前（{start_7d_str}）までの「実際の電力需要（実績値）」と、当時予測していた履歴（翌日予測）を重ねて表示し、今日から6日後（{end_6d_str}）までの「最新の需要予測」をシームレスに繋げて表示しています。\n
+            【下段】過去の予測がどれくらい当たっていたか、各時刻（30分単位）の「予測誤差（絶対誤差）」を可視化しています。
+            """
+        )
 
         demand_fc = load_parquet("demand_forecast", version_key=version)
         demand_hist = load_parquet("demand_forecast_history", version_key=version)
@@ -307,7 +315,12 @@ def main():
         # ========================
 
         st.subheader("2. JEPX 東京スポット価格の予測")
-
+        st.caption(
+            f"""
+            【上段】過去7日前（{start_7d_str}）から今日までの「実際のスポット価格（実績値）」と予測推移、および6日後（{end_6d_str}）までの「価格予測」を表示しています。予測は不確実性を考慮し、P10（安値圏）/ P50（中央値）/ P90（高値圏）という3つの幅（分位点）で表現しています。\n
+            【下段】予測分布全体の正確性を評価する指標「CRPSスコア」の推移を表示しています（値がゼロに近いほど高精度）。
+            """
+        )
         price_fc = load_parquet("price_forecast", version_key=version)
         price_hist = load_parquet("price_forecast_history", version_key=version)
         price_eval = load_parquet("price_evaluation_detail", version_key=version)
@@ -323,6 +336,13 @@ def main():
         # ========================
 
         st.subheader("3. エネルギーミックス最適化")
+        st.caption(
+            """
+            【上段】予測された電力需要を満たしつつ、発電コストが最も安くなるような「最適な電源構成（太陽光、火力、蓄電池など）」の組み合わせを時間帯別にシミュレーションした結果です。
+            昨日分と今日分の2日間を表示しており、今日分については、[🔗 東電PG でんき予報 エリア需給実績データ / 当日](https://www.tepco.co.jp/forecast/html/area_data-j.html) で同様に可視化されています。 \n
+            【下段】前日のシミュレーションに対して、実際の需給実績とのズレがどれくらい生じたか（ネットエラー）を表示し、計画の妥当性を評価しています。"
+            """
+        )
 
         dispatch_display = load_parquet("dispatch_optimal", version_key=version)
         dispatch_error = load_parquet("dispatch_error_yesterday", version_key=version)
@@ -353,11 +373,18 @@ def main():
         # ----- 4.1 供給側リスク (JEPX) -----
         with tab_supply:
             st.markdown("#### 4.1 供給側リスク")
-            st.caption("JEPX 発電設備の停止・出力低下情報")
-
+            st.caption(
+                """
+                発電設備の停止・出力低下は、供給余力やJEPX価格に影響する可能性があります。
+                ここでは、価格予測やエネルギーミックス最適化の結果を解釈するための参考情報として表示しています。
+                """
+            )
+            try:
+                df_jepx = load_parquet("jepx_outages_latest")
+            except Exception:
+                df_jepx = None
             summary = load_json("data/cache/jepx_outages_summary.json")
-            df_jepx = load_parquet("jepx_outages_latest")
-
+            st.success(f" 集計期間 : {start_str} 〜 {end_str} （最終更新時刻 (JST) : {summary.get('updated_at', '-')}）")
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("停止・出力低下件数", summary.get("n_records", "-"))
 
@@ -370,15 +397,7 @@ def main():
             col3.metric("計画外停止件数", summary.get("unplanned_count", "-"))
             col4.metric("復旧未定件数", summary.get("unknown_recovery_count", "-"))
 
-            # st.caption(f"最終更新時刻 (JST): {summary.get('updated_at', '-')}")
-
-            st.markdown(
-                """
-                発電設備の停止・出力低下は、供給余力やJEPX価格に影響する可能性があります。
-                ここでは、価格予測やエネルギーミックス最適化の結果を解釈するための参考情報として表示しています。
-                """
-            )
-            
+            # メッセージの作成
             if df_jepx is not None and not df_jepx.empty:
                 show_cols = [
                     c for c in [
@@ -387,49 +406,57 @@ def main():
                         "停止原因", "最終更新日時"
                     ] if c in df_jepx.columns
                 ]
-                st.success(f" 集計期間: {start_str} 〜 {end_str}")
                 st.dataframe(df_jepx[show_cols], use_container_width=True)
             else:
-                st.toast("詳細データが見つかりませんでした。")
-            st.link_button("JEPX 停止情報一覧を開く", "https://hjks.jepx.or.jp/hjks/outages")
+                st.info("詳細データが見つかりませんでした。")
+            st.link_button("🔗 JEPX 停止情報一覧", "https://hjks.jepx.or.jp/hjks/outages")
 
 
         # ----- 4.2 送配電・需要家側リスク (PG) -----
         with tab_demand:
             st.markdown("#### 4.2 送配電・需要家側リスク")
-            st.caption("東京電力パワーグリッド 停電情報・過去履歴")
             try:
                 df_pg = load_parquet("pg_outages_past_week")
             except Exception:
                 df_pg = None
-
-            st.markdown(
+            summary = load_json("data/cache/pg_outages_summary.json")
+            
+            st.caption(
                 """
-                停電情報は、需要予測や価格予測の直接の入力データではありませんが、
-                送配電設備の状態や需要家への影響を把握するための参考情報として表示します。
+                停電履歴情報は、需要予測や価格予測の直接の入力データではありませんが、送配電設備の状態や需要家への影響を把握するための参考情報として表示します。
+                なお、最新の停電情報は [🔗 東電PG リアルタイム停電情報](https://teideninfo.tepco.co.jp/) をご確認ください
                 """
             )
-
+            st.success(f"集計期間 : {start_str} 〜 {today_str} （最終更新時刻 (JST) : {summary.get('updated_at', '-')}）")
+                
+            col1, col2, col3, = st.columns(3)
+            total_num = summary.get("n_records")
+            col1.metric(
+                "停電発生件数",
+                f"{total_num:,.0f}" if total_num is not None else "-"
+            )
+            total_houses = summary.get("total_affected_houses")
+            col2.metric(
+                "合計停電軒数",
+                f"約 {total_houses:,.0f}" if total_houses is not None else "-"
+            )
+            invest_num = summary.get("under_investigation_count")
+            col3.metric(
+                "原因調査中件数",
+                f"{invest_num:,.0f}" if invest_num is not None else "-"
+            )
+            
             # メッセージの作成
-            period_text = f"（対象期間: {start_str} 〜 {today_str}）"
             if df_pg is not None and not df_pg.empty:
-                st.success(f"総レコード数: {len(df_pg)} 件 {period_text}")
                 st.dataframe(df_pg, use_container_width=True)
             else:
                 st.info("現在、表示できる直近の停電履歴キャッシュはありません。公式のリアルタイム情報をご確認ください。")
-
+                
             # 公式ページへのリンクボタンエリア
-            col1, col2 = st.columns(2)
-            with col1:
-                st.link_button(
-                    "🔗 東電PG リアルタイム停電情報",
-                    "https://teideninfo.tepco.co.jp/",
-                )
-            with col2:
-                st.link_button(
-                    "🔗 停電履歴検索（公式ページ）",
-                    "https://teideninfo.tepco.co.jp/day/teiden/index-j.html",
-                )
+            st.link_button(
+                "🔗 停電履歴検索",
+                "https://teideninfo.tepco.co.jp/day/teiden/index-j.html",
+            )
 
     with tab_model:
         meta = load_metadata()
@@ -446,20 +473,20 @@ def main():
 
         st.markdown(
             f"""
-    **目的**  
-    - 30分刻みで電力需要（MW）を予測する  
-    - 上段では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を1つの時間軸で表示する  
-    - 下段では、過去7日分の翌日予測に対する**各時刻（30分単位）の予測誤差**を表示する
+            **目的**  
+            - 30分刻みで電力需要（MW）を予測する  
+            - 上段では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を1つの時間軸で表示する  
+            - 下段では、過去7日分の翌日予測に対する**各時刻（30分単位）の予測誤差**を表示する
 
-    **入力データ**  
-    - 気象（実績+予報）：気温 / 湿度 など（`weather_bf1w_af1w.parquet`）  
-    - カレンダー特徴：月・時刻（sin/cos 変換）、休日フラグ（祝日 + 年末年始 + お盆）  
-    - 体感温度に近い補助特徴：`temperature_abs = |temperature - 18.1|`  
+            **入力データ**  
+            - 気象（実績+予報）：気温 / 湿度 など（`weather_bf1w_af1w.parquet`）  
+            - カレンダー特徴：月・時刻（sin/cos 変換）、休日フラグ（祝日 + 年末年始 + お盆）  
+            - 体感温度に近い補助特徴：`temperature_abs = |temperature - 18.1|`  
 
-    **モデル**  
-    - {sources.get("demand_model", "GRU（時系列モデル）")}  
-    - 学習済み重み（`.pth`）と目的変数スケーラ（`scaler_y.pkl`）は Hugging Face Hub に置き、
-    GitHub には毎日更新される cache のみを置く設計です
+            **モデル**  
+            - {sources.get("demand_model", "GRU（時系列モデル）")}  
+            - 学習済み重み（`.pth`）と目的変数スケーラ（`scaler_y.pkl`）は Hugging Face Hub に置き、
+            GitHub には毎日更新される cache のみを置く設計です
             """
         )
 
@@ -468,28 +495,28 @@ def main():
 
         st.markdown(
             f"""
-    **目的**  
-    - 東京エリアの JEPX スポット価格（円/kWh）を、将来の不確実性を含めて推定する  
-    - 画面上では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を表示する  
-    - 予測は **P10 / P50 / P90** の分位点で表し、下段には各時刻（30単位）の **CRPS** を表示する
-        - CRPS (Continuous Ranked Probability Score)
-            - 意味：予測分布全体と実際の値の差を評価する指標。小さいほど良い
-            - 解釈：
-                - Pinball Lossを全分位点にわたって統合したような指標
-                - 分布全体の予測精度を一つの数値で表す
-                - モデル全体の分布予測の質を比較するのに便利
+            **目的**  
+            - 東京エリアの JEPX スポット価格（円/kWh）を、将来の不確実性を含めて推定する  
+            - 画面上では、**過去7日分の実績と翌日予測の履歴**、および**未来7日分の最新予測**を表示する  
+            - 予測は **P10 / P50 / P90** の分位点で表し、下段には各時刻（30単位）の **CRPS** を表示する
+                - CRPS (Continuous Ranked Probability Score)
+                    - 意味：予測分布全体と実際の値の差を評価する指標。小さいほど良い
+                    - 解釈：
+                        - Pinball Lossを全分位点にわたって統合したような指標
+                        - 分布全体の予測精度を一つの数値で表す
+                        - モデル全体の分布予測の質を比較するのに便利
 
-    **入力データ**  
-    - 需要：需要予測（`predicted_demand`）および必要なら実績需要  
-    - 価格ラグ：過去のJEPX価格（24時間前）  
-    - 市況：燃料（Brent / Henry Hub / 石炭など）・為替（USD/JPY など）、ラグ
-    - 天候：気温、日照時間、全天日射、風速
+            **入力データ**  
+            - 需要：需要予測（`predicted_demand`）および必要なら実績需要  
+            - 価格ラグ：過去のJEPX価格（24時間前）  
+            - 市況：燃料（Brent / Henry Hub / 石炭など）・為替（USD/JPY など）、ラグ
+            - 天候：気温、日照時間、全天日射、風速
 
-    **モデル**  
-    - {sources.get("price_model", "GAM + LightGBM（分位点回帰）")}  
-    - **GAM**：季節性・時刻（sin/cos）・休日など「なめらかな周期構造」を捉える（基礎形状）  
-    - **LightGBM**：燃料・為替・ラグ等の非線形関係を捉え、GAMだけでは取り切れない変動を補正
-    - 翌日分と、それ以降の期間では使用する価格モデルのラグを変えリークにならないようにしています
+            **モデル**  
+            - {sources.get("price_model", "GAM + LightGBM（分位点回帰）")}  
+            - **GAM**：季節性・時刻（sin/cos）・休日など「なめらかな周期構造」を捉える（基礎形状）  
+            - **LightGBM**：燃料・為替・ラグ等の非線形関係を捉え、GAMだけでは取り切れない変動を補正
+            - 翌日分と、それ以降の期間では使用する価格モデルのラグを変えリークにならないようにしています
             """
         )
 
@@ -498,20 +525,20 @@ def main():
 
         st.markdown(
             f"""
-    **目的**  
-    - 需要予測を満たしつつ、1日分（30分×48コマ）の供給コストを最小化する電源構成を求める  
-    - 上段では、**昨日分と今日分**の電源構成を積み上げで表示し、下段では**昨日分の電源別ネットエラー**を表示する  
+            **目的**  
+            - 需要予測を満たしつつ、1日分（30分×48コマ）の供給コストを最小化する電源構成を求める  
+            - 上段では、**昨日分と今日分**の電源構成を積み上げで表示し、下段では**昨日分の電源別ネットエラー**を表示する  
 
-    **入力**  
-    - 需要：需要予測（`predicted_demand` または `demand`）  
-    - 再エネ上限：太陽光・風力の時刻別上限（予報や設備容量から算出）  
-    - 設備制約：火力・水力などの最大/最小、ランプ制約  
-    - 蓄電池・揚水：容量、充放電効率、入出力上限、SOC制約  
-    - コスト：燃料単価・起動費・不足（shedding）ペナルティなど
+            **入力**  
+            - 需要：需要予測（`predicted_demand` または `demand`）  
+            - 再エネ上限：太陽光・風力の時刻別上限（予報や設備容量から算出）  
+            - 設備制約：火力・水力などの最大/最小、ランプ制約  
+            - 蓄電池・揚水：容量、充放電効率、入出力上限、SOC制約  
+            - コスト：燃料単価・起動費・不足（shedding）ペナルティなど
 
-    **モデル**  
-    - {sources.get("optimizer", "数理最適化（線形/混合整数など）")}  
-    - 「予測→最適化→結果保存」までを毎日自動で回し、最新の電源構成を更新します
+            **モデル**  
+            - {sources.get("optimizer", "数理最適化（線形/混合整数など）")}  
+            - 「予測 → 最適化 → 結果保存」までを毎日自動で回し、最新の電源構成を更新します
             """
         )
 
@@ -529,11 +556,12 @@ def main():
         st.markdown("### 全体フロー")
         st.markdown(
             """
-    1. **データ取得**：需要実績 / 天気（実績+予報）/ 市場価格（JEPX）/ 燃料・為替  
-    2. **前処理・特徴量生成**：モデル入力の整形（欠損処理、休日フラグ、ラグ、移動平均など）  
-    3. **予測**：需要 → 価格（分位点）  
-    4. **最適化**：1日分の電源構成を最適化  
-    5. **保存**：`data/cache/*.parquet` と `metadata.json` を更新し、ダッシュボードが参照
+            1. **データ取得**：需要実績 / 天気（実績+予報）/ 市場価格（JEPX）/ 燃料・為替 / JEPX停止情報 / 東電PG停電履歴
+            2. **前処理・特徴量生成**：モデル入力の整形（欠損処理、休日フラグ、ラグ、移動平均など）  
+            3. **予測**：需要 → 価格（分位点）  
+            4. **最適化**：1日分の電源構成を最適化  
+            5. **リスク参考情報の更新**：供給側リスク（JEPX停止情報）と送配電・需要家側リスク（東電PG停電履歴）を保存
+            6. **保存**：`data/cache/*.parquet` と `metadata.json` を更新し、ダッシュボードが参照
             """
         )
 
@@ -543,17 +571,17 @@ def main():
         st.markdown("**需要（実績）・価格（実績）**")
         st.markdown(
             f"""
-    - 需要実績: {src.get("demand", "TEPCO でんき予報 エリア需給実績データ）")}  
-    - 市場価格: {src.get("jepx", "JEPX 日前スポット（東京エリア）")}  
-    - JEPXはページ操作後にダウンロードが発生するため、Playwrightでブラウザ操作を自動化しています
+            - 需要実績 : [{src.get("demand", "東電PG でんき予報 エリア需給実績データ")}](https://www.tepco.co.jp/forecast/html/area_jukyu-j.html)  
+            - 市場価格 : [{src.get("jepx", "JEPX 日前スポット（東京エリア）")}](https://www.jepx.jp/electricpower/market-data/spot/)  
+            - JEPXはページ操作後にダウンロードが発生するため、Playwrightでブラウザ操作を自動化しています
             """
         )
 
-        st.markdown("**天気（実績+予報）**")
+        st.markdown("**天気（実績 + 予報）**")
         st.markdown(
             f"""
-    - {src.get('weather', 'Open-Meteo（JMAベース）など')}  
-    - 「一週間前〜一週間後」をまとめて取得し、需要・価格の特徴量に利用します
+            - 天気ソース : [{src.get('weather', 'Open-Meteo（JMAベース）など')}](https://api.open-meteo.com/v1/forecast)  
+            - 「一週間前〜一週間後」をまとめて取得し、需要・価格の特徴量に利用します
             """
         )
 
@@ -561,32 +589,41 @@ def main():
         st.markdown(
             "\n".join(
                 [
-                    f"- 為替: {markets.get('fx', 'Frankfurter / ECB など')}",
-                    f"- 原油: {markets.get('oil', 'EIA / yfinance BZ=F など')}",
-                    f"- LNG: {markets.get('lng', 'EIA / yfinance NG=F など')}",
-                    f"- 石炭: {markets.get('coal', 'World Bank Pink Sheet など')}",
+                    f"- 為替 : [{markets.get('fx', 'Frankfurter / ECB')}](https://frankfurter.dev/)",
+                    f"- 原油 : [{markets.get('oil', 'EIA / yfinance BZ=F')}](https://www.eia.gov/dnav/pet/hist/RBRTED.htm)",
+                    f"- LNG : [{markets.get('lng', 'EIA / yfinance NG=F')}](https://www.eia.gov/dnav/ng/hist/rngwhhdD.htm)",
+                    f"- 石炭 : [{markets.get('coal', 'World Bank Pink Sheet')}](https://www.worldbank.org/en/research/commodity-markets)",
                 ]
             )
         )
 
+        st.markdown("**リスク参考情報**")
+        st.markdown(
+            """
+            - 供給側リスク : [JEPX 発電設備の停止・出力低下情報](https://hjks.jepx.or.jp/hjks/outages)  
+            - 送配電・需要家側リスク : [東電PG 停電履歴情報](https://teideninfo.tepco.co.jp/day/teiden/index-j.html)  
+            - Playwrightでブラウザ操作を自動化しています
+            """
+        )
+
         st.markdown("---")
-        st.markdown("### 2. 前処理・特徴量生成（`predict_demand.py`, `predict_price.py`）")
+        st.markdown("### 2. 前処理・特徴量生成・予測（`predict_demand.py`, `predict_price.py`）")
 
         st.markdown("**需要予測の特徴量**")
         st.markdown(
             f"""
-    - 利用データ: 気象（実績+予報）、休日フラグ、月・時刻（sin/cos）、補助特徴（temperature_abs）など  
-    - モデル: {src.get("demand_model", "GRU")}  
-    - 出力: `demand_forecast.parquet`（予測 + 実績の統合）
+            - 利用データ: 気象（実績+予報）、休日フラグ、月・時刻（sin/cos）、補助特徴（temperature_abs）など  
+            - モデル: {src.get("demand_model", "GRU")}  
+            - 出力: `demand_forecast.parquet`（予測 + 実績の統合）
             """
         )
 
         st.markdown("**価格予測の特徴量**")
         st.markdown(
             f"""
-    - 利用データ: 需要予測、JEPX過去価格（ラグ/移動平均）、燃料・為替、天候など  
-    - モデル: {src.get("price_model", "GAM + LightGBM（分位点）")}  
-    - 出力: P10 / P50 / P90（またはP10/P50/P90相当）の分位点価格
+            - 利用データ: 需要予測、JEPX過去価格（ラグ/移動平均）、燃料・為替、天候など  
+            - モデル: {src.get("price_model", "GAM + LightGBM（分位点）")}  
+            - 出力: P10 / P50 / P90（またはP10/P50/P90相当）の分位点価格
             """
         )
 
@@ -594,21 +631,21 @@ def main():
         st.markdown("### 3. 最適化（`optimize_dispatch.py`）")
         st.markdown(
             f"""
-    - 需要（予測）を満たす電源構成をコスト最小化で求める 
-    - 入力: 需要予測、燃料コスト、再エネ上限、設備制約など  
-    - モデル: {src.get("optimizer", "数理最適化モデル")}  
-    - 出力: 電源別の出力とコスト（`opt_dispatch.parquet` など）
+            - 需要（予測）を満たす電源構成をコスト最小化で求める 
+            - 入力: 需要予測、燃料コスト、再エネ上限、設備制約など  
+            - モデル: {src.get("optimizer", "数理最適化モデル")}  
+            - 出力: 電源別の出力とコスト（`opt_dispatch.parquet` など）
             """
         )
-
+        
         st.markdown("---")
         st.markdown("### 4. キャッシュ・ダッシュボード連携（`run_daily_pipeline.py`）")
         st.markdown(
             """
-    - 上記 1〜3 を一括実行し、`data/cache/*.parquet` を生成します。 
-    - 併せて `metadata.json` に「最終更新時刻」「データソース」「モデル情報」を保存します。  
-    - ダッシュボードは `metadata.json` を読み込み、画面上部の更新日時や「データ・モデル情報」タブ、
-    フッターのクレジットに反映しています。
+            - 上記 1〜3 を一括実行し、`data/cache/*.parquet` を生成します。 
+            - 併せて `metadata.json` に「最終更新時刻」「データソース」「モデル情報」を保存します。  
+            - ダッシュボードは `metadata.json` を読み込み、画面上部の更新日時や「データ・モデル情報」タブ、
+            フッターのクレジットに反映しています。
             """
         )
 
@@ -677,7 +714,7 @@ def main():
     </style>
 
     <div class="footer">
-    © 2025 nakamin
+    © 2026 nakamin
     </div>
     """,
         unsafe_allow_html=True,

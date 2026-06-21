@@ -61,11 +61,11 @@ capacity:
     oil: 60.900000000000006
     th_other: 1107.75
     hydro: 1862.7
-    biomass: 453.6
-    misc: 333.90000000000003
+    biomass: 472.5
+    misc: 328.65000000000003
     pstorage: 4348.05
     battery: 43.480500000000085
-    tie: 4162.2
+    tie: 4193.7
 hydro:
   P_max: 1863.0
   RU: 150
@@ -93,17 +93,17 @@ thermal:
     RD: 150
     c: 11000
   biomass:
-    P_max: 454.0
+    P_max: 472.0
     RU: 80
     RD: 80
     c: 5000
   misc:
-    P_max: 334.0
+    P_max: 329.0
     RU: 100
     RD: 100
     c: 9000
 tie:
-  cap: 4162.0
+  cap: 4194.0
   c_import: 13000
 battery:
   E_max: 2000

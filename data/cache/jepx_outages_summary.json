@@ -1,11 +1,11 @@
 {
   "source": "JEPX 発電情報公開システム 停止情報一覧",
   "source_url": "https://hjks.jepx.or.jp/hjks/outages",
-  "updated_at": "2026-06-20T22:05:05.814954+09:00",
+  "updated_at": "2026/06/21 16:06",
   "status": "success",
-  "n_records": 124,
-  "total_decrease_mw": 4804.0,
-  "total_affected_mw": 48151.509999999995,
+  "n_records": 122,
+  "total_decrease_mw": 4982.0,
+  "total_affected_mw": 47552.509999999995,
   "unplanned_count": 9,
-  "unknown_recovery_count": 33
+  "unknown_recovery_count": 34
 }

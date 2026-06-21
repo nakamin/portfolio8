@@ -1,0 +1,9 @@
+{
+  "source": "東京電力 停電情報",
+  "source_url": "https://teideninfo.tepco.co.jp/day/teiden/index-j.html",
+  "updated_at": "2026/06/21 16:06",
+  "status": "success",
+  "n_records": 115,
+  "total_affected_houses": 51080,
+  "under_investigation_count": 25
+}

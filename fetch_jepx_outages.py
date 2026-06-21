@@ -15,6 +15,9 @@ OUT_DIR = Path("data/cache")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 JST = pytz.timezone("Asia/Tokyo")
 
+PARQUET_OATH = OUT_DIR / "jepx_outages_latest.parquet"
+JSON_PATH = OUT_DIR / "jepx_outages_summary.json"
+
 JEPX_COLUMNS = [
     "エリア",
     "発電事業者",
@@ -32,10 +35,10 @@ JEPX_COLUMNS = [
     "停止原因",
     "最終更新日時",
 ]
+
 def _to_numeric_kw(series: pd.Series) -> pd.Series:
     """
-    '1,000' や '-' などが混ざる列を数値に変換するための関数。
-    kW単位の列を想定しています。
+    '1,000' や '-' などが混ざる列を数値に変換するための関数（kW単位の列を想定）
     """
     return (
         series.astype(str)
@@ -57,18 +60,16 @@ def add_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["低下量_kW"] = _to_numeric_kw(df["低下量"])
         df["低下量_MW"] = df["低下量_kW"] / 1000
 
-    # 停止の場合、低下量が空欄で、認可出力だけ入っていることがある
-    # そのため「影響量」は、低下量があれば低下量、なければ認可出力を使う
+    # 停止の場合、低下量が空欄で、認可出力だけ入っている→「影響量」は、低下量があれば低下量、なければ認可出力を使う
     if "低下量_kW" in df.columns and "認可出力_kW" in df.columns:
         df["影響量_kW"] = df["低下量_kW"].fillna(df["認可出力_kW"])
         df["影響量_MW"] = df["影響量_kW"] / 1000
 
     return df
 
-def read_jepx_csv(download_path: Path, area: str = "東京") -> pd.DataFrame:
+def read_jepx_csv(download_path: Path) -> pd.DataFrame:
     """
-    JEPX停止情報CSVを読み込む。
-    CSVにエリア列が含まれる場合・含まれない場合の両方に対応する。
+    JEPX停止情報CSVを読み込む
     """
     encodings = ["cp932", "utf-8-sig", "utf-8"]
     last_error = None
@@ -95,12 +96,11 @@ def read_jepx_csv(download_path: Path, area: str = "東京") -> pd.DataFrame:
 
 def fetch_jepx_outages_tocsv() -> pd.DataFrame:
     """
-    Playwrightを使ってブラウザを起動し、
-    CSVダウンロードボタンをクリックしてデータを取得する。
+    Playwrightを使ってブラウザを起動し、CSVダウンロードボタンをクリックしてデータを取得する
     """
     
     with sync_playwright() as p:
-        # headless=True でバックグラウンド実行（挙動を見たい時は False に）
+        # headless=True でバックグラウンド実行（挙動を見たい時は False にする）
         browser = p.chromium.launch(headless=True)
         
         # User-Agentを一般のブラウザに偽装してセキュリティブロックを回避
@@ -125,9 +125,9 @@ def fetch_jepx_outages_tocsv() -> pd.DataFrame:
         downloaded_path = Path(download.path())
 
         # browser/contextを閉じる前に読み込む
-        df = read_jepx_csv(downloaded_path, area="東京")
+        df = read_jepx_csv(downloaded_path)
         df = add_numeric_columns(df)
-        browser.close()    
+        browser.close()
     return df
 
 def summarize_jepx(df: pd.DataFrame) -> dict:
@@ -171,6 +171,7 @@ def filter_jepx_by_target_period(
     target_start: pd.Timestamp,
     target_end: pd.Timestamp,
 ) -> pd.DataFrame:
+    
     df = df.copy()
 
     df["停止日時_dt"] = pd.to_datetime(df["停止日時"], errors="coerce")
@@ -196,24 +197,23 @@ def filter_jepx_by_target_period(
     return df[is_overlapping].copy()
 
 def fetch_jepx_outages() -> None:
-    parquet_path = OUT_DIR / "jepx_outages_latest.parquet"
-    json_path = OUT_DIR / "jepx_outages_summary.json"
-    
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    display_now = now.strftime("%Y/%m/%d %H:%M")
     past_start = pd.to_datetime(now - timedelta(days=7)).normalize()
     pred_end = pd.to_datetime(now + timedelta(days=6)).normalize()
-    print(f"[aggregate] {past_start} ~ {pred_end}")
+    print(f"[AGGREGATE] {past_start} ~ {pred_end}")
 
     try:
         df = fetch_jepx_outages_tocsv()
-        print("[Success] download JEPX outage data")
+        print("[SUCCESS] download JEPX outage data")
         df = filter_jepx_by_target_period(df, past_start, pred_end)
-        print("[Filter] valid time: \n", df)
+        print("[FILTER] valid time: \n", df)
         summary = summarize_jepx(df)
+        summary["updated_at"] = display_now
 
         # 成功したらParquetとJSONを更新（キャッシュ更新）
-        df.to_parquet(parquet_path, index=False)
-        with open(json_path, "w", encoding="utf-8") as f:
+        df.to_parquet(PARQUET_OATH, index=False)
+        with open(JSON_PATH, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=2)
 
         print("[OK] JEPX outage data updated with fresh web data.")
@@ -221,19 +221,19 @@ def fetch_jepx_outages() -> None:
 
     except Exception as e:
         
-        if parquet_path.exists():
-            print(f"[FALLBACK] Found cache file: {parquet_path}. Regenerating summary from cache.")
+        if PARQUET_OATH.exists():
+            print(f"[FALLBACK] Found cache file: {PARQUET_OATH}. Regenerating summary from cache.")
             try:
                 # キャッシュからデータを読み込み、サマリーを再作成
-                df_cached = pd.read_parquet(parquet_path)
+                df_cached = pd.read_parquet(PARQUET_OATH)
                 summary = summarize_jepx(df_cached)
                 
                 # エラーが起きたが、データ自体はキャッシュで維持できている状態を記録
-                summary["updated_at"] = now.isoformat()
+                summary["updated_at"] = display_now
                 summary["status"] = "fallback_cache"
                 summary["error_log"] = str(e) # デバッグ用にエラー内容も残しておく
                 
-                with open(json_path, "w", encoding="utf-8") as f:
+                with open(JSON_PATH, "w", encoding="utf-8") as f:
                     json.dump(summary, f, ensure_ascii=False, indent=2)
                     
                 print("[OK] JEPX summary updated using existing cache data.")
@@ -247,12 +247,12 @@ def fetch_jepx_outages() -> None:
             error_summary = {
                 "source": "JEPX 発電情報公開システム 停止情報一覧",
                 "source_url": JEPX_OUTAGES_URL,
-                "updated_at": now.isoformat(),
+                "updated_at": display_now,
                 "status": "failed",
                 "error": str(e),
                 "n_records": 0
             }
-            with open(json_path, "w", encoding="utf-8") as f:
+            with open(JSON_PATH, "w", encoding="utf-8") as f:
                 json.dump(error_summary, f, ensure_ascii=False, indent=2)
 
     print("[INFO] JEPX processing step passed.")
