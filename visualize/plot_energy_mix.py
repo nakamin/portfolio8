@@ -10,13 +10,14 @@ COLOR_MAP = {
     "oil":           "#FFD6E8",  # 明るいピンク（石油）
     "th_other":      "#FFEAF2",  # ごく淡いピンク（火力その他）
     "biomass":       "#D9F9B1",  # パステル黄緑（バイオマス）
+    "nuclear":       "#D8BFD8",  # パステルパープル（原子力）
     "wind_net":      "#B7E4B6",  # パステルグリーン（風力）
     "hydro":         "#B3D9FF",  # パステルブルー（水力）
     "pstorage_gen":  "#CDEEFF",  # 淡い水色（揚水発電）
     "pv_net":        "#FFFACD",  # レモンシフォン（太陽光）
     "battery_dis":   "#FFDAB3",  # パステルオレンジ（蓄電池放電）
     "import":        "#D3D3D3",  # ライトグレー（連系線受電）
-    "misc":          "#D8BFD8",  # パステルパープル（その他）
+    "misc":          "#E6E6FA",  # ラベンダー（その他）
 }
 
 def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame, now_floor):
@@ -30,7 +31,7 @@ def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame
     err = err.sort_values("timestamp")
 
     num_cols = [
-        "pv", "wind", "hydro", "coal", "oil", "lng", "th_other", "biomass", "misc",
+        "pv", "wind", "hydro", "nuclear", "coal", "oil", "lng", "th_other", "biomass", "misc",
         "curtail_pv", "curtail_wind",
         "pstorage_gen", "pstorage_pump",
         "battery_dis", "battery_ch",
@@ -55,11 +56,22 @@ def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame
     )
 
     stack_order = [
-        "lng", "coal", "oil", "th_other", "biomass",
-        "wind_net", "hydro", "pstorage_gen", "pv_net",
-        "battery_dis", "import", "misc"
+        "nuclear",
+        "hydro",
+        "lng",
+        "coal",
+        "oil",
+        "th_other",
+        "biomass",
+        "wind_net",
+        "pv_net",
+        "pstorage_gen",
+        "battery_dis",
+        "import",
+        "misc",
     ]
     name_map = {
+        "nuclear": "原子力",
         "lng": "LNG",
         "coal": "石炭",
         "oil": "石油",
@@ -115,8 +127,32 @@ def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame
             row=1, col=1, secondary_y=True
         )
 
-    error_cols = [c for c in err.columns if c.endswith("_error")]
+    preferred_error_order = [
+        "nuclear_error",
+        "hydro_error",
+        "lng_error",
+        "coal_error",
+        "oil_error",
+        "th_other_error",
+        "biomass_error",
+        "wind_error",
+        "pv_error",
+        "pstorage_gen_error",
+        "battery_dis_error",
+        "import_error",
+        "misc_error",
+        "curtail_pv_error",
+        "curtail_wind_error",
+    ]
+    existing_error_cols = [c for c in err.columns if c.endswith("_error")]
+    error_cols = [c for c in preferred_error_order if c in existing_error_cols]
+    error_cols += [c for c in existing_error_cols if c not in error_cols]
+    
+    for c in error_cols:
+        err[c] = pd.to_numeric(err[c], errors="coerce").fillna(0.0)
+
     err_name_map = {
+        "nuclear_error": "原子力",
         "lng_error": "LNG", "coal_error": "石炭", "oil_error": "石油",
         "th_other_error": "火力(その他)", "biomass_error": "バイオマス",
         "wind_error": "風力", "hydro_error": "水力",
@@ -126,6 +162,7 @@ def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame
         "curtail_wind_error": "風力抑制",
     }
     color_map = {
+    "nuclear_error": "#D8BFD8",
     "lng_error": "#F4A6A6",
     "coal_error": "#F7C1C1",
     "oil_error": "#FFD6E8",
@@ -137,7 +174,7 @@ def plot_energy_mix(dispatch_display: pd.DataFrame, dispatch_error: pd.DataFrame
     "pv_error": "#FFFACD",
     "battery_dis_error": "#FFDAB3",
     "import_error": "#D3D3D3",
-    "misc_error": "#D8BFD8",
+    "misc_error": "#E6E6FA",
     "curtail_pv_error": "#FFB3B3",
     "curtail_wind_error": "#C6F6C6",
 }

@@ -32,7 +32,7 @@ capacity:
     tie:       {mode: estimate, stat: quantile}   # 連系線（流入上限）
     pv:        {mode: external}   # 気象から計算（P_maxは使わない）
     wind:      {mode: external}
-    nuclear:   {mode: fixed, P_max: 0}
+    nuclear:   {mode: fixed}       # P_maxは下の nuclear セクションで指定
     geothermal: {mode: fixed, P_max: 0}
     biomass:   {mode: estimate, stat: avg}
     misc:     {mode: estimate, stat: avg}
@@ -40,9 +40,18 @@ capacity:
 # 水力（通常水力）
 hydro:
   P_max: 2000        # capacity.mode=fixed のときだけ使用
-  RU: 150            # ランプ（上昇） MW/Δt
-  RD: 150            # ランプ（下降）
-  E_day: 25000       # 一日使えるエネルギー [MWh]
+  RU: 100            # ランプ（上昇） MW/Δt
+  RD: 100            # ランプ（下降）
+  E_day: 30000       # 一日使えるエネルギー [MWh]
+
+# 原子力
+# 低い可変費・小さいランプで、ベースロード寄りの電源として扱う。
+# 実績からP_maxを推定したい場合は capacity.sources.nuclear を {mode: estimate, stat: quantile} に変更する。
+nuclear:
+  P_max: 1350       # 6/22直近の実績から。原子力を使わない場合は 0 にする
+  RU: 50            # ランプ（上昇） MW/Δt
+  RD: 50            # ランプ（下降）
+  c: 1000           # 可変費 円/MWh
 
 # 火力（ここに P_max を後で上書きする）
 thermal:
@@ -70,8 +79,8 @@ battery:
 # 揚水発電（上池）
 pstorage:
   E_max: 10000       # MWh
-  P_pump_max: 1500   # 揚水（消費）上限 MW
-  P_gen_max: 1500    # 発電上限 MW
+  P_pump_max: 3500   # 揚水（消費）上限 MW
+  P_gen_max: 4000    # 発電上限 MW
   eta_pump: 0.90
   eta_gen: 0.90
   E0: 5000           # 初期貯水量 [MWh]

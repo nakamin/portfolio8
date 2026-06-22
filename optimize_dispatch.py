@@ -55,7 +55,7 @@ def apply_pmax_from_actuals(params_raw, long_df, demand_forecast_df, today=None)
 
     target_cols = [
         "lng", "coal", "oil", "th_other",
-        "hydro", "biomass", "misc",
+        "hydro", "nuclear", "biomass", "misc",
         "pstorage", "battery", "tie",
     ]
     pmax_est = {}
@@ -97,6 +97,10 @@ def apply_pmax_from_actuals(params_raw, long_df, demand_forecast_df, today=None)
     if "hydro" in pmax_est and "hydro" in params:
         params["hydro"]["P_max"] = float(round(pmax_est["hydro"], 0))
 
+    # nuclear
+    if "nuclear" in pmax_est and "nuclear" in params:
+        params["nuclear"]["P_max"] = float(round(pmax_est["nuclear"], 0))
+
     # pstorage, battery, tie
     if "pstorage" in pmax_est and "pstorage" in params:
         params["pstorage"]["P_gen_max"] = float(round(pmax_est["pstorage"], 0))
@@ -116,9 +120,11 @@ def apply_pmax_from_actuals(params_raw, long_df, demand_forecast_df, today=None)
 # ==========
 def build_costs(params: dict, fuels_row) -> dict:
     """
-    thermal セクションと fuels_row から costs dict を作る
+    最適化で使う可変費（円/MWh）の dict を作る。
+
     - coal, oil, lng: fuels_row の c_* で上書き
     - それ以外(th_other, biomass, miscなど): params.yaml の c を使う
+    - nuclear: params.yaml の nuclear.c を使う
     """
     thermal_conf = params["thermal"]
 
@@ -132,6 +138,9 @@ def build_costs(params: dict, fuels_row) -> dict:
         else:
             costs[g] = float(conf["c"])
 
+    if "nuclear" in params:
+        costs["nuclear"] = float(params["nuclear"].get("c", 0.0))
+
     return costs
 
 # ==========
@@ -140,7 +149,7 @@ def build_costs(params: dict, fuels_row) -> dict:
 def solve_dispatch(df_ts, costs, params, init_state):
     """
     df_ts: DataFrame[timestamp, load_MW, pv_avail_MW, wind_avail_MW]
-    costs: {"coal": 円/MWh, "oil": 円/MWh, "lng": 円/MWh}
+    costs: {"coal": 円/MWh, "oil": 円/MWh, "lng": 円/MWh, "nuclear": 円/MWh, ...}
     params: params_today（P_max埋め込み済み）
     init_state: 直前時刻の出力（簡略に使う）。
     """
@@ -168,6 +177,11 @@ def solve_dispatch(df_ts, costs, params, init_state):
     RD_hy = float(params["hydro"]["RD"])
     E_day_hy = float(params["hydro"]["E_day"])
 
+    nuclear_conf = params.get("nuclear", {"P_max": 0.0, "RU": 0.0, "RD": 0.0, "c": 0.0})
+    Pmax_nuclear = float(nuclear_conf.get("P_max", 0.0))
+    RU_nuclear = float(nuclear_conf.get("RU", 0.0))
+    RD_nuclear = float(nuclear_conf.get("RD", 0.0))
+
     thermal_keys = ["coal", "oil", "lng", "th_other", "biomass", "misc"]
     Pmax_th = {g: float(params["thermal"][g]["P_max"]) for g in thermal_keys}
     RU_th = {g: float(params["thermal"][g]["RU"]) for g in thermal_keys}
@@ -186,6 +200,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
     m.Curt_wind = Var(m.T, within=NonNegativeReals)
 
     m.P_hy   = Var(m.T, within=NonNegativeReals)
+    m.P_nuclear = Var(m.T, within=NonNegativeReals)
     m.P_coal = Var(m.T, within=NonNegativeReals)
     m.P_oil  = Var(m.T, within=NonNegativeReals)
     m.P_lng  = Var(m.T, within=NonNegativeReals)
@@ -194,6 +209,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
     m.P_misc   = Var(m.T, within=NonNegativeReals)
 
     m.R_hy   = Var(m.T, within=NonNegativeReals)
+    m.R_nuclear = Var(m.T, within=NonNegativeReals)
     m.R_coal = Var(m.T, within=NonNegativeReals)
     m.R_oil  = Var(m.T, within=NonNegativeReals)
     m.R_lng  = Var(m.T, within=NonNegativeReals)
@@ -223,7 +239,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
     def obj_rule(_):
         return sum(
             dt * (
-                costs["coal"] * m.P_coal[t]
+                costs.get("nuclear", 0.0) * m.P_nuclear[t]
+                + costs["coal"] * m.P_coal[t]
                 + costs["oil"] * m.P_oil[t]
                 + costs["lng"] * m.P_lng[t]
                 + costs["th_other"] * m.P_th_other[t]
@@ -248,6 +265,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
 
     # 出力上限（P_max - 予備力）
     m.CapHy = Constraint(m.T, rule=lambda _, t: m.P_hy[t] <= Pmax_hy - m.R_hy[t])
+    m.CapNuclear = Constraint(m.T, rule=lambda _, t: m.P_nuclear[t] <= Pmax_nuclear - m.R_nuclear[t])
     m.CapCoal = Constraint(m.T, rule=lambda _, t: m.P_coal[t] <= Pmax_th["coal"] - m.R_coal[t])
     m.CapOil = Constraint(m.T, rule=lambda _, t: m.P_oil[t] <= Pmax_th["oil"] - m.R_oil[t])
     m.CapLng = Constraint(m.T, rule=lambda _, t: m.P_lng[t] <= Pmax_th["lng"] - m.R_lng[t])
@@ -262,6 +280,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
     def reserve_rule(_, t):
         return (
             m.R_hy[t]
+            + m.R_nuclear[t]
             + m.R_coal[t] + m.R_oil[t] + m.R_lng[t]
             + m.R_th_other[t] + m.R_biomass[t] + m.R_misc[t]
             + m.R_bat[t] + m.R_ps[t] + m.R_imp[t]
@@ -325,8 +344,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
         m.PSRes.add(m.R_ps[t] <= Pgenmax - m.P_gen[t])
         m.PSRes.add(m.R_ps[t] <= m.E_ps[t] / dt)
 
-    # ランプ制約（火力と水力）
-    init = init_state or {k: 0.0 for k in ["hy"] + thermal_keys}
+    # ランプ制約（原子力・火力・水力）
+    init = init_state or {k: 0.0 for k in ["hy", "nuclear"] + thermal_keys}
 
     def _get_init(key: str) -> float:
         return float(init.get(key, 0.0))
@@ -344,6 +363,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
     for t in T[1:]:
         m.Ramp.add(m.P_hy[t] - m.P_hy[t - 1] <= RU_hy)
         m.Ramp.add(m.P_hy[t - 1] - m.P_hy[t] <= RD_hy)
+        m.Ramp.add(m.P_nuclear[t] - m.P_nuclear[t - 1] <= RU_nuclear)
+        m.Ramp.add(m.P_nuclear[t - 1] - m.P_nuclear[t] <= RD_nuclear)
         for g in thermal_keys:
             Pg = getattr(m, f"P_{g}")
             m.Ramp.add(Pg[t] - Pg[t - 1] <= RU_th[g])
@@ -360,7 +381,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
     # 右辺：需要 + 揚水の揚水 + 蓄電池充電 + 未供給
     def balance_rule(_, t):
         return (
-            m.P_pv[t] + m.P_wind[t] + m.P_hy[t]
+            m.P_pv[t] + m.P_wind[t] + m.P_hy[t] + m.P_nuclear[t]
             + m.P_coal[t] + m.P_oil[t] + m.P_lng[t]
             + m.P_th_other[t] + m.P_biomass[t] + m.P_misc[t]
             + m.P_gen[t] + m.P_dis[t] + m.P_imp[t]
@@ -380,6 +401,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "pv":    [value(m.P_pv[t])   for t in T],
         "wind":  [value(m.P_wind[t]) for t in T],
         "hydro": [value(m.P_hy[t])   for t in T],
+        "nuclear": [value(m.P_nuclear[t]) for t in T],
         "coal":  [value(m.P_coal[t]) for t in T],
         "oil":   [value(m.P_oil[t])  for t in T],
         "lng":   [value(m.P_lng[t])  for t in T],
@@ -396,7 +418,8 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "curtail_pv":   [value(m.Curt_pv[t])   for t in T],
         "curtail_wind": [value(m.Curt_wind[t]) for t in T],
         "reserve": [
-            value(m.R_hy[t] + m.R_coal[t] + m.R_oil[t] + m.R_lng[t]
+            value(m.R_hy[t] + m.R_nuclear[t]
+                + m.R_coal[t] + m.R_oil[t] + m.R_lng[t]
                 + m.R_th_other[t] + m.R_biomass[t] + m.R_misc[t]
                 + m.R_bat[t] + m.R_ps[t] + m.R_imp[t])
             for t in T
@@ -405,6 +428,7 @@ def solve_dispatch(df_ts, costs, params, init_state):
         "predicted_demand":[load[t] for t in T],
     })
     out["total_cost"] = dt * (
+        out["nuclear"]*costs.get("nuclear", 0.0) +
         out["coal"]*costs["coal"] +
         out["oil"]*costs["oil"] +
         out["lng"]*costs["lng"] +
@@ -603,6 +627,7 @@ def optimize_dispatch():
         # 出力初期値を引き継ぐ
         init_state = {
             "hy": float(row["hydro"]),
+            "nuclear": float(row.get("nuclear", 0.0)),
             "coal": float(row["coal"]),
             "oil": float(row["oil"]),
             "lng": float(row["lng"]),
@@ -620,6 +645,7 @@ def optimize_dispatch():
             row = prev_row.iloc[0]
             init_state = {
                 "hy": float(row["hydro"]),
+                "nuclear": float(row.get("nuclear", 0.0)),
                 "coal": float(row["coal"]),
                 "oil": float(row["oil"]),
                 "lng": float(row["lng"]),
@@ -630,6 +656,7 @@ def optimize_dispatch():
     if init_state is None:
         init_state = {
             "hy": 500.0,
+            "nuclear": 0.0,
             "coal": 3000.0,
             "oil": 0.0,
             "lng": 12000.0,
@@ -705,11 +732,22 @@ def optimize_dispatch():
     print("actual_yesterday: ", actual_yesterday.head())
 
     compare_cols = [
-        "pv", "wind", "hydro", "coal", "oil", "lng",
+        "pv", "wind", "hydro", "nuclear", "coal", "oil", "lng",
         "th_other", "biomass", "misc",
         "pstorage_gen", "battery_dis", "import",
         "curtail_pv", "curtail_wind",
     ]
+
+    for col in compare_cols:
+        if col not in pred_yesterday.columns:
+            pred_yesterday[col] = 0.0
+        else:
+            pred_yesterday[col] = pred_yesterday[col].fillna(0.0)
+
+        if col not in actual_yesterday.columns:
+            actual_yesterday[col] = 0.0
+        else:
+            actual_yesterday[col] = actual_yesterday[col].fillna(0.0)
 
     eval_df = pred_yesterday.merge(
         actual_yesterday[["timestamp"] + compare_cols + ["demand_actual"]],

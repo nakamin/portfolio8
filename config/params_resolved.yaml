@@ -45,7 +45,6 @@ capacity:
       mode: external
     nuclear:
       mode: fixed
-      P_max: 0
     geothermal:
       mode: fixed
       P_max: 0
@@ -68,9 +67,14 @@ capacity:
     tie: 4202.1
 hydro:
   P_max: 1863.0
-  RU: 150
-  RD: 150
-  E_day: 25000
+  RU: 100
+  RD: 100
+  E_day: 30000
+nuclear:
+  P_max: 1350
+  RU: 50
+  RD: 50
+  c: 1000
 thermal:
   coal:
     P_max: 7123.0
@@ -114,7 +118,7 @@ battery:
   E0: 1000
 pstorage:
   E_max: 10000
-  P_pump_max: 1500
+  P_pump_max: 3500
   P_gen_max: 4348.0
   eta_pump: 0.9
   eta_gen: 0.9
