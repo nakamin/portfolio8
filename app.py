@@ -360,33 +360,52 @@ def main():
             except Exception:
                 df_jepx = None
             summary = load_json("data/cache/jepx_outages_summary.json")
-            st.success(f" 集計期間 : {start_str} 〜 {end_str} （最終更新時刻 (JST) : {summary.get('updated_at', '-')}）")
+            st.success(f" 集計期間 : {start_str} 〜 {end_str}")
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("停止・出力低下件数", summary.get("n_records", "-"))
 
-            total_mw = summary.get("total_decrease_mw")
+            affected_mw = summary.get("total_affected_mw")
             col2.metric(
-                "合計低下量",
-                f"{total_mw:,.0f} MW" if total_mw is not None else "-"
+                "影響量合計",
+                f"{affected_mw:,.0f} MW" if affected_mw is not None else "-"
             )
 
             col3.metric("計画外停止件数", summary.get("unplanned_count", "-"))
             col4.metric("復旧未定件数", summary.get("unknown_recovery_count", "-"))
 
-            # メッセージの作成
             if df_jepx is not None and not df_jepx.empty:
                 show_cols = [
                     c for c in [
-                        "エリア", "発電所名", "発電形式", "停止区分", "種別", 
-                        "低下量", "停止日時", "復旧見通し", "復旧予定日", 
-                        "停止原因", "最終更新日時"
-                    ] if c in df_jepx.columns
+                        "エリア",
+                        "発電事業者",
+                        "発電所名",
+                        "発電形式",
+                        "ユニット名",
+                        "停止区分",
+                        "種別",
+                        "認可出力_MW",
+                        "低下量_MW",
+                        "影響量_MW",
+                        "停止日時",
+                        "復旧見通し",
+                        "復旧予定日",
+                        "停止原因",
+                        "最終更新日時",
+                    ]
+                    if c in df_jepx.columns
                 ]
-                st.dataframe(df_jepx[show_cols], use_container_width=True)
+
+                display_df = df_jepx[show_cols].copy()
+
+                # 数値列を見やすく丸める
+                for col in ["認可出力_MW", "低下量_MW", "影響量_MW"]:
+                    if col in display_df.columns:
+                        display_df[col] = display_df[col].round(1)
+
+                st.dataframe(display_df, use_container_width=True)
             else:
                 st.info("詳細データが見つかりませんでした。")
             st.link_button("🔗 JEPX 停止情報一覧", "https://hjks.jepx.or.jp/hjks/outages")
-
 
         # ----- 4.2 送配電・需要家側リスク (PG) -----
         with tab_demand:
@@ -403,7 +422,7 @@ def main():
                 なお、最新の停電情報は [🔗 東電PG リアルタイム停電情報](https://teideninfo.tepco.co.jp/) をご確認ください
                 """
             )
-            st.success(f"集計期間 : {start_str} 〜 {today_str} （最終更新時刻 (JST) : {summary.get('updated_at', '-')}）")
+            st.success(f"集計期間 : {start_str} 〜 {today_str}")
                 
             col1, col2, col3, = st.columns(3)
             total_num = summary.get("n_records")

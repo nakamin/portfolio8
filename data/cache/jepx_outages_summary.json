@@ -1,11 +1,12 @@
 {
   "source": "JEPX 発電情報公開システム 停止情報一覧",
   "source_url": "https://hjks.jepx.or.jp/hjks/outages",
-  "updated_at": "2026/06/21 16:06",
   "status": "success",
-  "n_records": 122,
-  "total_decrease_mw": 4982.0,
-  "total_affected_mw": 47552.509999999995,
-  "unplanned_count": 9,
-  "unknown_recovery_count": 34
+  "n_records": 152,
+  "total_decrease_mw": 4591.054,
+  "total_affected_mw": 53085.85399999999,
+  "unplanned_count": 3,
+  "unknown_recovery_count": 3,
+  "max_affected_mw": 1000.0,
+  "max_affected_plant": "袖ケ浦火力発電所"
 }

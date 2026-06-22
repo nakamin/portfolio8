@@ -145,12 +145,10 @@ def clean_date(df):
     return df_clean
 
 def summarize_tepco_teiden(df: pd.DataFrame) -> dict:
-    now = datetime.now(ZoneInfo("Asia/Tokyo"))
 
     summary = {
         "source": "東京電力 停電情報",
         "source_url": TEPCO_URL,
-        "updated_at": now.isoformat(),
         "status": "success",
         "n_records": int(len(df)),
         "total_affected_houses": 0,    # 合計停電軒数（約120軒などを数値化）
@@ -194,7 +192,6 @@ def fetch_pg_outages() -> None:
             df = clean_date(df)
             print(df)
             summary = summarize_tepco_teiden(df)
-            summary["updated_at"] = display_now
 
             # 成功したらParquetとJSONを更新（キャッシュ更新）
             df.to_parquet(PARQUET_PATH, index=False)
@@ -219,7 +216,6 @@ def fetch_pg_outages() -> None:
                 summary = summarize_tepco_teiden(df_cached)
                 
                 # エラーが起きたが、データ自体はキャッシュで維持できている状態を記録
-                summary["updated_at"] = display_now
                 summary["status"] = "fallback_cache"
                 summary["error_log"] = str(e)  # デバッグ用にエラー内容を記録
                 
@@ -237,7 +233,6 @@ def fetch_pg_outages() -> None:
             error_summary = {
                 "source": "東京電力 停電情報",
                 "source_url": TEPCO_URL,
-                "updated_at": display_now,
                 "status": "failed",
                 "error": str(e),
                 "n_records": 0

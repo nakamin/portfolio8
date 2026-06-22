@@ -58,14 +58,14 @@ capacity:
   pmax_today:
     lng: 18223.8
     coal: 7123.200000000001
-    oil: 60.900000000000006
+    oil: 160.65
     th_other: 1107.75
     hydro: 1862.7
-    biomass: 472.5
-    misc: 328.65000000000003
+    biomass: 478.8
+    misc: 338.1
     pstorage: 4348.05
-    battery: 43.480500000000085
-    tie: 4193.7
+    battery: 42.0
+    tie: 4202.1
 hydro:
   P_max: 1863.0
   RU: 150
@@ -78,7 +78,7 @@ thermal:
     RD: 300
     c: 7000
   oil:
-    P_max: 61.0
+    P_max: 161.0
     RU: 300
     RD: 300
     c: 13000
@@ -93,22 +93,22 @@ thermal:
     RD: 150
     c: 11000
   biomass:
-    P_max: 472.0
+    P_max: 479.0
     RU: 80
     RD: 80
     c: 5000
   misc:
-    P_max: 329.0
+    P_max: 338.0
     RU: 100
     RD: 100
     c: 9000
 tie:
-  cap: 4194.0
+  cap: 4202.0
   c_import: 13000
 battery:
   E_max: 2000
   P_ch_max: 500
-  P_dis_max: 43.0
+  P_dis_max: 42.0
   eta_ch: 0.95
   eta_dis: 0.95
   E0: 1000

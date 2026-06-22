@@ -131,38 +131,74 @@ def fetch_jepx_outages_tocsv() -> pd.DataFrame:
     return df
 
 def summarize_jepx(df: pd.DataFrame) -> dict:
-    now = datetime.now(ZoneInfo("Asia/Tokyo"))
 
     summary = {
         "source": "JEPX 発電情報公開システム 停止情報一覧",
         "source_url": JEPX_OUTAGES_URL,
-        "updated_at": now.isoformat(),
         "status": "success",
+
+        # フィルタ後の表示対象件数
         "n_records": int(len(df)),
+
+        # 低下量そのものの合計
         "total_decrease_mw": None,
+
+        # 停止・出力低下を含めた影響量
         "total_affected_mw": None,
+
+        # リスクの性質
         "unplanned_count": None,
         "unknown_recovery_count": None,
+
+        # 画面で使いやすい補助指標
+        "max_affected_mw": None,
+        "max_affected_plant": None,
     }
+
+    if df.empty:
+        summary["total_decrease_mw"] = 0.0
+        summary["total_affected_mw"] = 0.0
+        summary["unplanned_count"] = 0
+        summary["unknown_recovery_count"] = 0
+        return summary
 
     if "低下量_MW" in df.columns:
         summary["total_decrease_mw"] = float(df["低下量_MW"].fillna(0).sum())
 
     if "影響量_MW" in df.columns:
-        summary["total_affected_mw"] = float(df["影響量_MW"].fillna(0).sum())
+        affected = df["影響量_MW"].fillna(0)
+        summary["total_affected_mw"] = float(affected.sum())
+        summary["max_affected_mw"] = float(affected.max())
+
+        if affected.max() > 0:
+            max_idx = affected.idxmax()
+            if "発電所名" in df.columns:
+                summary["max_affected_plant"] = str(df.loc[max_idx, "発電所名"])
 
     if "停止区分" in df.columns:
         summary["unplanned_count"] = int(
-            df["停止区分"].astype(str).str.contains("計画外", na=False).sum()
-        )
-
-    if "復旧見通し" in df.columns:
-        summary["unknown_recovery_count"] = int(
-            df["復旧見通し"]
+            df["停止区分"]
             .astype(str)
-            .str.contains("未定|なし|不明", regex=True, na=False)
+            .str.contains("計画外", na=False)
             .sum()
         )
+
+    # 復旧見通しなし、または復旧予定日が欠損しているものを「復旧未定系」として数える
+    unknown_mask = pd.Series(False, index=df.index)
+
+    if "復旧見通し" in df.columns:
+        unknown_mask |= (
+            df["復旧見通し"]
+            .astype(str)
+            .str.contains("未定|なし|不明|確認中", regex=True, na=False)
+        )
+
+    if "復旧予定日_dt" in df.columns:
+        unknown_mask |= df["復旧予定日_dt"].isna()
+    elif "復旧予定日" in df.columns:
+        unknown_mask |= df["復旧予定日"].isna()
+
+    summary["unknown_recovery_count"] = int(unknown_mask.sum())
 
     return summary
 
@@ -171,11 +207,23 @@ def filter_jepx_by_target_period(
     target_start: pd.Timestamp,
     target_end: pd.Timestamp,
 ) -> pd.DataFrame:
-    
+    """
+    JEPX停止情報を、ダッシュボード表示用に絞り込む
+
+    方針：
+    - 復旧予定日がある行は、停止期間と表示期間が重なるものを残す
+    - 復旧予定日がない行は、古いデータを無条件に残さない
+      → 停止日時または最終更新日時が表示期間に近いものだけ残す
+    """
     df = df.copy()
 
     df["停止日時_dt"] = pd.to_datetime(df["停止日時"], errors="coerce")
     df["復旧予定日_dt"] = pd.to_datetime(df["復旧予定日"], errors="coerce")
+
+    if "最終更新日時" in df.columns:
+        df["最終更新日時_dt"] = pd.to_datetime(df["最終更新日時"], errors="coerce")
+    else:
+        df["最終更新日時_dt"] = pd.NaT
 
     # 復旧予定日が日付だけの場合、その日の終わりまで影響するとみなす
     has_recovery = df["復旧予定日_dt"].notna()
@@ -186,21 +234,77 @@ def filter_jepx_by_target_period(
     )
 
     target_start = pd.Timestamp(target_start).tz_localize(None)
-    target_end = pd.Timestamp(target_start).tz_localize(None)
-    # 1. 停止の始まりが表示期間の終わりより前（または開始不明）
-    starts_before_end = df["停止日時_dt"].isna() | (df["停止日時_dt"] <= target_end)
-    # 2. 復旧が表示期間の始まりより後（またはまだ復旧していない/未定）
-    ends_after_start = df["復旧予定日_dt"].isna() | (df["復旧予定日_dt"] >= target_start)
+    target_end = pd.Timestamp(target_end).tz_localize(None)
 
-    # この2つが両方成り立つものが「期間中に1日でも止まっていた」データ
-    is_overlapping = starts_before_end & ends_after_start
-    return df[is_overlapping].copy()
+    # 1. 復旧予定日があるデータ
+    # 停止期間と表示対象期間が重なるものを残す
+    has_recovery_date = df["復旧予定日_dt"].notna()
+
+    starts_before_end = df["停止日時_dt"].isna() | (df["停止日時_dt"] <= target_end)
+    ends_after_start = df["復旧予定日_dt"] >= target_start
+
+    overlap_with_known_recovery = (
+        has_recovery_date
+        & starts_before_end
+        & ends_after_start
+    )
+
+    # 2. 復旧予定日がないデータ
+    # 無条件に「現在も停止中」とはみなさない
+    # 停止日時または最終更新日時が対象期間内・対象期間後に近いものだけ残す
+    no_recovery_date = df["復旧予定日_dt"].isna()
+
+    recent_start = (
+        df["停止日時_dt"].notna()
+        & (df["停止日時_dt"] >= target_start)
+        & (df["停止日時_dt"] <= target_end)
+    )
+
+    recent_update = (
+        df["最終更新日時_dt"].notna()
+        & (df["最終更新日時_dt"] >= target_start)
+        & (df["最終更新日時_dt"] <= target_end)
+    )
+
+    recent_unknown_recovery = (
+        no_recovery_date
+        & (recent_start | recent_update)
+    )
+
+    # 3. 最終的な表示対象
+    is_display_target = overlap_with_known_recovery | recent_unknown_recovery
+
+    out = df[is_display_target].copy()
+
+    # 見やすいように、計画外停止・影響量が大きいものを上にする
+    out["表示優先度"] = 0
+
+    if "停止区分" in out.columns:
+        out.loc[
+            out["停止区分"].astype(str).str.contains("計画外", na=False),
+            "表示優先度",
+        ] += 3
+
+    if "復旧予定日_dt" in out.columns:
+        out.loc[out["復旧予定日_dt"].isna(), "表示優先度"] += 1
+
+    if "影響量_MW" in out.columns:
+        out["影響量_MW_sort"] = out["影響量_MW"].fillna(0)
+    else:
+        out["影響量_MW_sort"] = 0
+
+    out = out.sort_values(
+        ["表示優先度", "影響量_MW_sort", "停止日時_dt"],
+        ascending=[False, False, False],
+    )
+
+    return out.reset_index(drop=True)
 
 def fetch_jepx_outages() -> None:
     now = datetime.now(ZoneInfo("Asia/Tokyo"))
     display_now = now.strftime("%Y/%m/%d %H:%M")
     past_start = pd.to_datetime(now - timedelta(days=7)).normalize()
-    pred_end = pd.to_datetime(now + timedelta(days=6)).normalize()
+    pred_end = pd.to_datetime(now + timedelta(days=6)).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
     print(f"[AGGREGATE] {past_start} ~ {pred_end}")
 
     try:
@@ -208,8 +312,8 @@ def fetch_jepx_outages() -> None:
         print("[SUCCESS] download JEPX outage data")
         df = filter_jepx_by_target_period(df, past_start, pred_end)
         print("[FILTER] valid time: \n", df)
+        print(df.columns)
         summary = summarize_jepx(df)
-        summary["updated_at"] = display_now
 
         # 成功したらParquetとJSONを更新（キャッシュ更新）
         df.to_parquet(PARQUET_OATH, index=False)
@@ -229,7 +333,6 @@ def fetch_jepx_outages() -> None:
                 summary = summarize_jepx(df_cached)
                 
                 # エラーが起きたが、データ自体はキャッシュで維持できている状態を記録
-                summary["updated_at"] = display_now
                 summary["status"] = "fallback_cache"
                 summary["error_log"] = str(e) # デバッグ用にエラー内容も残しておく
                 
@@ -247,7 +350,6 @@ def fetch_jepx_outages() -> None:
             error_summary = {
                 "source": "JEPX 発電情報公開システム 停止情報一覧",
                 "source_url": JEPX_OUTAGES_URL,
-                "updated_at": display_now,
                 "status": "failed",
                 "error": str(e),
                 "n_records": 0
