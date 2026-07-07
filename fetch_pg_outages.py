@@ -29,84 +29,144 @@ NEW_COLUMNS = [
     "取得日時",
 ]
 
+def get_frame_with_select(page, timeout_ms: int = 30000):
+    """
+    page本体またはiframe内から、select要素を持つframeを探す
+    Actions環境ではページ構造や読み込みタイミングがローカルと異なることがあるためpage直下だけでなくframeも確認
+    """
+    deadline = time.time() + timeout_ms / 1000
+
+    while time.time() < deadline:
+        # page本体 + iframe群を確認
+        for frame in page.frames:
+            try:
+                if frame.locator("select").count() > 0:
+                    return frame
+            except Exception:
+                continue
+
+        time.sleep(1)
+
+    # デバッグ用ログ
+    try:
+        print("[DEBUG] page url:", page.url)
+        print("[DEBUG] page title:", page.title())
+        print("[DEBUG] frame count:", len(page.frames))
+        print("[DEBUG] html head:", page.content()[:1000])
+    except Exception as e:
+        print(f"[DEBUG] failed to dump page info: {e}")
+
+    raise RuntimeError("select要素がページまたはiframe内に見つかりませんでした。")
+
 def fetch_pg_outages_past_week() -> pd.DataFrame:
     """
     Playwrightを使って東電PGの該当ページから、今日を含む過去7日間（合計8日分）の停電履歴を取得
     - すべてのデータを1つのDataFrameに結合して返す
     """
     all_dfs = []
-    
-    # 東京タイムゾーン
+
     tz = ZoneInfo("Asia/Tokyo")
     today = datetime.now(tz)
-    
-    date_str_list = [(today - timedelta(days=i)).strftime("%Y年%m月%d日") for i in range(8)]
-    
+
+    date_str_list = [
+        (today - timedelta(days=i)).strftime("%Y年%m月%d日")
+        for i in range(8)
+    ]
+
     print(f"[AGGREGATE] {date_str_list[-1]} ~ {date_str_list[0]}")
 
     with sync_playwright() as p:
-
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
+
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1365, "height": 900},
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+        )
+
         page = context.new_page()
-        
-        # ページを開く
-        page.goto(TEPCO_URL, timeout=60000)
-        
-        # 画面の最初のドロップダウン（select）要素が読み込まれるのを待つ
-        page.wait_for_selector("select", timeout=15000)
-        
+
+        page.goto(
+            TEPCO_URL,
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+
+        # networkidleはサイトによって終わらないことがあるので、失敗しても進める
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        # page直下だけでなく iframe 内も含めて select を探す
+        frame = get_frame_with_select(page, timeout_ms=30000)
+
+        select_count = frame.locator("select").count()
+        print(f"[DEBUG] select_count: {select_count}")
+
+        if select_count == 0:
+            raise RuntimeError("select要素が0件です。")
+
         for date_str in date_str_list:
             print(f"[FETCH] Retrieving data for {date_str}")
-            
+
             try:
-                # 最初のセレクトボックスで日付を選択（label指定）
-                page.locator("select").first.select_option(label=date_str)
-                
+                # 最初のselectで日付を選択
+                frame.locator("select").first.select_option(label=date_str)
+
                 try:
-                    page.wait_for_load_state("networkidle", timeout=3000)
+                    page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
-                    pass # タイムアウトしても処理を進める
-                
-                time.sleep(1.5) # レンダリングの安全マージン
-                
-                # HTMLを取得してPandasで解析
-                html_content = page.content()
+                    pass
+
+                time.sleep(1.5)
+
+                # iframe内にテーブルがある場合もあるので、frame.content() を使う
+                html_content = frame.content()
                 tables = pd.read_html(StringIO(html_content))
-                
+
                 if not tables:
+                    print(f"-> No tables found on {date_str}")
                     continue
-                
-                # ページ内で最も「列数が多い」表（＝停電情報のデータグリッド）を抽出
+
                 df_day = max(tables, key=lambda x: x.shape[1]).copy()
                 df_day.columns = [str(c).strip() for c in df_day.columns]
-                
-                # 「履歴情報はありません」などの文言しかない場合はスキップ
-                if df_day.empty or (len(df_day) == 1 and "ありません" in str(df_day.iloc[0])):
+
+                if df_day.empty or (
+                    len(df_day) == 1 and "ありません" in str(df_day.iloc[0])
+                ):
                     print(f"-> There was no record of power outages on {date_str}")
                     continue
-                
-                # どの日付のデータか判別できるように列を追加
+
                 df_day["target_date"] = date_str
                 all_dfs.append(df_day)
+
                 print(f"-> {date_str} [SUCCESS] {len(df_day)} records")
-                
+
             except Exception as e:
                 print(f"[WARN] {date_str} : {e}")
                 continue
 
         browser.close()
 
-    # --- データの結合 (concat) ---
     if not all_dfs:
         print("[INFO] There were no relevant power outage data entries within the specified period")
         return pd.DataFrame()
-        
+
     combined_df = pd.concat(all_dfs, ignore_index=True)
     combined_df["fetched_at"] = today.isoformat()
-    
+
     return combined_df
 
 def clean_date(df: pd.DataFrame) -> pd.DataFrame:

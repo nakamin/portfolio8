@@ -2,7 +2,12 @@
   "source": "東京電力 停電情報",
   "source_url": "https://teideninfo.tepco.co.jp/day/teiden/index-j.html",
   "status": "success",
-  "n_records": 120,
-  "total_affected_houses": 51310,
-  "under_investigation_count": 28
+  "n_records": 108,
+  "total_affected_houses": 37910,
+  "under_investigation_count": 14,
+  "max_affected_houses": 3100,
+  "max_affected_area": "千葉県 千葉市緑区 高田町 平山町 誉田町２丁目",
+  "updated_at": "2026/07/07 22:19",
+  "target_start": "2026/06/30",
+  "target_end": "2026/07/07"
 }
