@@ -443,7 +443,25 @@ def main():
             
             # メッセージの作成
             if df_pg is not None and not df_pg.empty:
-                st.dataframe(df_pg, use_container_width=True)
+                show_cols = [
+                    c for c in [
+                        "都県名",
+                        "市区町村名",
+                        "地区",
+                        "停電軒数",
+                        "停電理由",
+                        "発生日時",
+                        "復旧日時",
+                        "更新日時",
+                        "対象日",
+                        "取得日時",
+                            ]
+                    if c in df_pg.columns
+                ]
+
+                display_df = df_pg[show_cols].copy()
+
+                st.dataframe(display_df, use_container_width=True)
             else:
                 st.info("現在、表示できる直近の停電履歴キャッシュはありません。公式のリアルタイム情報をご確認ください。")
                 
